@@ -1,0 +1,74 @@
+# ============================================================
+# InspirationOS — privacy-critical ignore rules
+# NEVER commit: raw Instagram exports, private messages, API
+# keys, uploaded files, databases, or generated user data.
+# ============================================================
+
+# --- Private data (uploads, extracted exports, generated user content) ---
+var/
+private-data/
+uploads/
+exports/
+# No ZIP is ever committable — synthetic fixture ZIPs are generated at test
+# time by fixture_builder.py, and real exports must never enter git.
+*.zip
+
+# --- Secrets & environment ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# --- Databases & caches ---
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+pgdata/
+redisdata/
+*.rdb
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage*
+dist/
+build/
+*.egg-info/
+
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+next-env.d.ts
+coverage/
+*.tsbuildinfo
+
+# --- Playwright ---
+test-results/
+playwright-report/
+blob-report/
+
+# --- Logs & temp ---
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp

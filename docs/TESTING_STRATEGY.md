@@ -1,0 +1,104 @@
+# InspirationOS — Testing Strategy
+
+## Principles
+
+- Every milestone ends with green tests proving its acceptance criteria.
+- **All test data is synthetic.** No real export content ever appears in
+  tests, fixtures, or git.
+- Tests that need Postgres/Redis run against real services (Docker locally,
+  service containers in CI) and **skip with an explicit message** when the
+  services are unreachable — they are never silently faked. CI always runs
+  them, so skips can't hide failures.
+
+## The synthetic fixture system (cornerstone)
+
+`backend/tests/fixture_builder.py` programmatically writes Instagram-export
+ZIPs at test time (nothing export-like is committed):
+
+- **Variant A** — current layout (`your_instagram_activity/messages/inbox/…`).
+- **Variant B** — legacy layout (`messages/inbox/…`).
+- Mojibake/emoji strings (UTF-8-as-latin-1 escapes) with known expected
+  decodings.
+- Multi-file paginated threads (`message_1.json`, `message_2.json`).
+- Self-DM present / absent variants; `personal_information.json` present /
+  missing.
+- Messages with missing fields, unsent messages, media-only messages.
+- Shared reels/posts (`share.link` + URLs inside `content`), including exact
+  duplicates and tracking-parameter variants.
+- An HTML-format export (must be rejected).
+- Malicious pair: zip-slip (path traversal entries) and zip-bomb (extreme
+  compression ratio / entry count).
+- A ~5,000-message export for performance tests (built on demand).
+
+Every real-world quirk discovered in M10 gets a new synthetic fixture
+reproducing it before the fix is considered done.
+
+## Test layers
+
+### Backend — pytest (`backend/tests/`)
+- **unit/** — no services needed: mojibake fix, URL canonicalization,
+  shortcode extraction, self-DM heuristics, dedupe logic, ZIP safety
+  rejections, scoring math, budget enforcement, log redaction, schema
+  validation + repair loop (canned bad LLM outputs).
+- **api/** — FastAPI `TestClient` against real Postgres, per-test
+  transactions/rollback.
+- **workers/** — RQ tasks executed synchronously against real Redis;
+  idempotency (run twice, same result) and retry paths.
+- Provider adapters (Anthropic/OpenAI) tested against faked HTTP (`respx`);
+  **no live API keys in tests or CI, ever.** MockProvider covers all AI
+  pipelines.
+
+### Frontend — Vitest + React Testing Library (`frontend/tests/`)
+Component behavior (reel-card states, filter bar, weight-slider re-rank math,
+keyboard review hook) and API-client contract tests against mocked responses.
+
+### End-to-end — Playwright (`e2e/specs/`)
+Runs against the full compose stack with `AI_PROVIDER=mock`. Critical path:
+login → upload synthetic ZIP → confirm self-DM → extract → inbox counts →
+cluster → bulk-describe cluster → keyboard-review a needs_context item →
+generate projects → adjust weights (observe re-rank) → combine two ideas →
+advisor review → generate README → export Markdown/JSON → delete import →
+verify gone.
+
+## Canonical commands
+
+```bash
+# Backend
+cd backend && python -m ruff format --check . && python -m ruff check .
+cd backend && python -m mypy app
+cd backend && python -m pytest -q                  # full suite
+cd backend && python -m pytest -q -m "not integration"   # unit-only (no services)
+
+# Frontend
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+cd frontend && npm run test -- --run
+
+# E2E (compose stack must be up)
+docker compose up -d --build
+cd e2e && npx playwright test
+```
+
+## CI (GitHub Actions, every push/PR)
+
+- **backend** — ruff + mypy + pytest with pgvector-Postgres and Redis service
+  containers, coverage report.
+- **frontend** — eslint + tsc + vitest.
+- **e2e** — compose up + Playwright critical path.
+- **gitleaks** — secret scan of the diff and history.
+
+A milestone is complete only when CI is green.
+
+## Real-data workflow (M10; safety rules apply before then too)
+
+1. Place the real export ZIP under gitignored `var/` only.
+2. Run the full pipeline **locally** (never on the VPS first) with
+   `AI_PROVIDER=mock` initially.
+3. Compare the import-verification report (parsed counts vs. raw ZIP scan
+   counts); investigate every category of skipped entry — none may be silent.
+4. Spot-check duplicate groups against known repeat shares.
+5. Exercise all three deletion scopes on a copy and verify the reports.
+6. Only after local verification, optionally load real data into the VPS
+   deployment.
+7. Any parser change motivated by real data ships with a synthetic fixture
+   reproducing the quirk.
