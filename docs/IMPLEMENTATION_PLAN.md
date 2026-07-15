@@ -28,22 +28,22 @@ cd frontend && npm run test -- --run
 checks, a proven job loop, and CI.
 
 Scope:
-- [ ] Monorepo layout per ARCHITECTURE.md (`backend/`, `frontend/`, `e2e/`).
-- [ ] `docker-compose.yml`: pgvector Postgres, Redis, backend (reload), RQ worker, Next.js dev.
-- [ ] Backend: FastAPI app, pydantic-settings config from env, SQLAlchemy 2 + Alembic wired, initial migration (`users`, `settings`, `jobs`).
-- [ ] `/api/health` endpoint checking DB + Redis; frontend page consuming it via the Next proxy.
-- [ ] Demo background job: enqueue via API → jobs row `queued→running→succeeded` → status poll endpoint.
-- [ ] Test skeletons: pytest (unit + api + workers dirs), Vitest + RTL, Playwright config + health spec.
-- [ ] GitHub Actions CI: backend / frontend / e2e / gitleaks jobs.
-- [ ] `.pre-commit-config.yaml` (ruff, ruff-format, gitleaks, frontend lint hook), `Makefile`, `.env.example`, `.gitignore`.
+- [x] Monorepo layout per ARCHITECTURE.md (`backend/`, `frontend/`, `e2e/`).
+- [x] `docker-compose.yml`: pgvector Postgres, Redis, backend (reload), RQ worker, Next.js dev.
+- [x] Backend: FastAPI app, pydantic-settings config from env, SQLAlchemy 2 + Alembic wired, initial migration (`users`, `settings`, `jobs`).
+- [x] `/api/health` endpoint checking DB + Redis; frontend page consuming it via the Next proxy.
+- [x] Demo background job: enqueue via API → jobs row `queued→running→succeeded` → status poll endpoint.
+- [x] Test skeletons: pytest (unit + api + workers dirs), Vitest + RTL, Playwright config + health spec.
+- [x] GitHub Actions CI: backend / frontend / e2e / gitleaks jobs.
+- [x] `.pre-commit-config.yaml` (ruff, ruff-format, gitleaks, frontend lint hook), `Makefile`, `.env.example`, `.gitignore`.
 
 Acceptance criteria:
 - [ ] Fresh clone + `docker compose up` yields a working stack (verified in CI's e2e job; locally once Docker Desktop exists).
 - [ ] `GET /api/health` returns ok with DB and Redis both reported healthy, reachable through the frontend proxy.
 - [ ] Demo job transitions `queued→running→succeeded` in the `jobs` table and the frontend shows the transition by polling.
-- [ ] Standard suite passes; unit tests pass with no services running.
+- [x] Standard suite passes; unit tests pass with no services running.
 - [ ] CI green on the initial PR.
-- [ ] gitleaks pre-commit blocks a planted fake secret (verified once, manually, then the plant removed).
+- [x] gitleaks pre-commit blocks a planted fake secret (verified once, manually, then the plant removed).
 
 Test commands (all must pass):
 ```bash

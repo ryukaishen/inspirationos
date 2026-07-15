@@ -10,7 +10,7 @@ and `ai_requests` never contain message content — IDs and counts only.**
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
 | `users` | id, email, password_hash (argon2id), created_at | Single user, but real auth. |
-| `settings` | id (singleton), enrichment_enabled (bool, default **false**), enrichment_consent_at, enrichment_rate_limit, ai_provider (`anthropic\|openai\|mock`), model_overrides (jsonb), monthly_budget_usd, scoring_weights (jsonb), review_prefs (jsonb) | One row; consent timestamp records the explicit opt-in. |
+| `settings` | id (singleton), enrichment_enabled (bool, default **false**), enrichment_consent_at, enrichment_rate_limit, ai_provider (`anthropic\|openai\|mock`), model_overrides (jsonb), monthly_budget_usd, scoring_weights (jsonb), review_prefs (jsonb) | One row, seeded by the initial migration (id=1, enrichment off, provider `mock`); consent timestamp records the explicit opt-in. |
 | `career_profile` | id (singleton), background_md, skills (jsonb), target_domains (text[]), experience_level, constraints (jsonb: time/compute), interests_md | Injected into generation prompts. |
 
 ## Import pipeline
@@ -51,7 +51,7 @@ and `ai_requests` never contain message content — IDs and counts only.**
 
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
-| `jobs` | id, rq_job_id, kind (`import_scan\|import_extract\|enrich_batch\|embed_batch\|cluster\|topics\|generate_projects\|generate_artifact\|export_bundle\|delete_data`), status (`queued\|running\|succeeded\|failed\|cancelled`), progress, total, payload (jsonb — **IDs only**), error (redacted), created_at, started_at, finished_at | Mirror of RQ state, DB is source of truth for the UI. |
+| `jobs` | id, rq_job_id, kind (`demo\|import_scan\|import_extract\|enrich_batch\|embed_batch\|cluster\|topics\|generate_projects\|generate_artifact\|export_bundle\|delete_data`), status (`queued\|running\|succeeded\|failed\|cancelled`), progress, total, payload (jsonb — **IDs only**), error (redacted: exception class name, never message text), created_at, started_at, finished_at | Mirror of RQ state, DB is source of truth for the UI. `demo` is the M1 job-loop proof task. |
 | `ai_requests` | id, job_id FK, provider, model, task, prompt_tokens, completion_tokens, est_cost_usd, latency_ms, status, created_at | **No prompt/response bodies** — cost observability without content. |
 
 Sessions live in Redis (server-side), not in Postgres.

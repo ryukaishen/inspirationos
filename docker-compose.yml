@@ -1,0 +1,90 @@
+# Dev stack: pgvector Postgres, Redis, FastAPI (reload), RQ worker, Next.js dev.
+# Works with zero configuration (dev-only credentials below); a root `.env`
+# (copied from .env.example) overrides via ${VAR:-default} interpolation.
+# Production overlay (docker-compose.prod.yml, Caddy, TLS) arrives with M9.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inspiration}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inspiration}
+      POSTGRES_DB: ${POSTGRES_DB:-inspiration}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inspiration} -d ${POSTGRES_DB:-inspiration}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      ENV: ${ENV:-development}
+      SECRET_KEY: ${SECRET_KEY:-dev-only-secret-change-me}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-inspiration}:${POSTGRES_PASSWORD:-inspiration}@postgres:5432/${POSTGRES_DB:-inspiration}
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/var/data
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-2048}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: python -m app.workers.runner
+    environment:
+      ENV: ${ENV:-development}
+      SECRET_KEY: ${SECRET_KEY:-dev-only-secret-change-me}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-inspiration}:${POSTGRES_PASSWORD:-inspiration}@postgres:5432/${POSTGRES_DB:-inspiration}
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/var/data
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        # backend runs migrations on start
+        condition: service_started
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  pgdata:

@@ -11,8 +11,9 @@ Instagram is the *first* importer behind a `SourceImporter` abstraction; the
 data model supports future sources (GitHub stars, YouTube Watch Later, X
 bookmarks, Reddit saved, …) without schema changes.
 
-> **Status: documentation phase.** The plan is approved; no application code
-> exists yet. Implementation proceeds milestone-by-milestone per
+> **Status: Milestone 1 (Foundation) implemented.** Monorepo skeleton, compose
+> stack, migrations, health checks, job loop, and CI exist. Implementation
+> proceeds milestone-by-milestone per
 > [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 ## What it will do
@@ -65,5 +66,46 @@ See [docs/PRIVACY_SECURITY.md](docs/PRIVACY_SECURITY.md).
 
 ## Getting started
 
-Not yet — Milestone 1 (Foundation) will introduce the Docker Compose dev stack
-and the quickstart instructions here. Until then, there is nothing to run.
+### Full stack (Docker)
+
+```bash
+cp .env.example .env    # optional — the dev stack runs with built-in dev defaults
+docker compose up --build
+```
+
+- Frontend: <http://localhost:3000> — system-health card and a demo background
+  job you can watch go `queued → running → succeeded`.
+- API health: <http://localhost:8000/api/health> (also proxied at
+  `http://localhost:3000/api/health`).
+- The backend container applies Alembic migrations on start; the worker
+  consumes the `imports` / `enrichment` / `ai` queues.
+
+### Without Docker (e.g. the current Windows dev box)
+
+```bash
+# Backend — unit tests, lint, and type checks need no services;
+# integration tests skip with an explicit message when Postgres/Redis are absent.
+cd backend
+python -m venv .venv
+.venv/Scripts/pip install -e ".[dev]"
+.venv/Scripts/python -m ruff format --check . && .venv/Scripts/python -m ruff check .
+.venv/Scripts/python -m mypy app
+.venv/Scripts/python -m pytest -q
+
+# Frontend
+cd frontend
+npm install
+npm run lint && npx tsc --noEmit && npm run test -- --run
+npm run dev     # expects the backend on :8000 for live data
+
+# E2E (requires the compose stack; CI runs it on every push/PR)
+cd e2e
+npm install
+npx playwright test
+```
+
+Enable the pre-commit hooks (ruff, gitleaks, frontend lint) once per clone:
+
+```bash
+backend/.venv/Scripts/pre-commit install
+```
