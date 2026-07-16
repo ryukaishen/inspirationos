@@ -17,7 +17,7 @@ and `ai_requests` never contain message content — IDs and counts only.**
 
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
-| `imports` | id, source (default `instagram`), filename, storage_key, size_bytes, checksum_sha256, export_format (`json\|html_detected`), status (`uploaded→scanning→scanned→extracting→extracted→failed→deleted`), counts (jsonb), error, created_at | Original ZIP retained in private storage until deleted; checksum dedupes re-uploads. |
+| `imports` | id, source (default `instagram`), filename (sanitized display name), storage_key (nullable — NULL for rejected HTML uploads, which keep no file), size_bytes (bigint), checksum_sha256, export_format (`json\|html_detected`), status (`uploaded→scanning→scanned→extracting→extracted→failed→deleted`), counts (jsonb; M2 scan stub stores `total_entries`/`message_files`), error (static message or exception class name only), created_at | Original ZIP retained in private storage until deleted. Dedupe: **partial unique index** `uq_imports_checksum_active` on checksum_sha256 `WHERE status NOT IN ('failed','deleted')` — race-safe at the DB level; failed/deleted rows never block a re-upload. |
 | `conversations` | id, import_id FK, thread_path, title, participant_names (jsonb), message_count, link_count, is_self_dm_candidate, is_selected, first_message_at, last_message_at | Populated by the scan pass — summaries only. |
 | `messages` | id, conversation_id FK, sender_name, sent_at, text, share_link, share_text | **Persisted only for user-selected conversations** (two-pass privacy design). Index (conversation_id, sent_at). |
 

@@ -23,6 +23,11 @@ class AppConfig(BaseSettings):
     data_dir: Path = Path("./var/data")
     max_upload_size_mb: int = 2048
 
+    # ZIP-bomb caps for uploaded archives (see services/ingest/zip_safety.py).
+    max_zip_entries: int = 100_000
+    max_zip_uncompressed_mb: int = 10_240
+    max_zip_compression_ratio: int = 100
+
 
 @lru_cache
 def get_config() -> AppConfig:

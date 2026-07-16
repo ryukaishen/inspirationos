@@ -39,9 +39,14 @@ def make_job(pg_engine: Engine) -> Generator:
         session.commit()
 
 
+# Dedicated queue name: a running dev compose worker also consumes "imports"
+# and must not race this test's SimpleWorker for the enqueued job.
+TEST_QUEUE = f"{QUEUE_IMPORTS}-test-demo"
+
+
 @pytest.fixture
 def imports_queue(redis_client: Redis) -> Generator[Queue, None, None]:
-    queue = Queue(QUEUE_IMPORTS, connection=redis_client)
+    queue = Queue(TEST_QUEUE, connection=redis_client)
     yield queue
     queue.empty()
 

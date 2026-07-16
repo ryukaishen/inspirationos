@@ -59,21 +59,22 @@ cd e2e && npx playwright test specs/health.spec.ts   # in CI or with Docker up
 rejected; fixtures exist.
 
 Scope:
-- [ ] Streamed, size-capped upload endpoint → Storage abstraction (`services/storage/`, local FS under `var/data/`) → `imports` row → `import_scan` job stub.
-- [ ] ZIP safety in `services/ingest/zip_safety.py`: zip-slip guard, zip-bomb caps (entry count, total uncompressed, compression ratio), never-wholesale extraction.
-- [ ] JSON-export detection; HTML exports rejected with "re-request as JSON" message.
-- [ ] SHA-256 checksum dedupe of re-uploaded ZIPs.
-- [ ] Temp cleanup guaranteed in `finally`; failure paths leave consistent `imports`/`jobs` rows.
-- [ ] `fixture_builder.py` v1: variants A/B, HTML export, zip-slip + zip-bomb fixtures.
-- [ ] Frontend: import screen (upload, list, detail with job progress polling).
+- [x] Streamed, size-capped upload endpoint → Storage abstraction (`services/storage/`, local FS under `var/data/`) → `imports` row → `import_scan` job stub.
+- [x] ZIP safety in `services/ingest/zip_safety.py`: zip-slip guard, zip-bomb caps (entry count, total uncompressed, compression ratio), never-wholesale extraction.
+- [x] JSON-export detection; HTML exports rejected with "re-request as JSON" message.
+- [x] SHA-256 checksum dedupe of re-uploaded ZIPs (app-level pre-check + authoritative partial unique index).
+- [x] Temp cleanup guaranteed in `finally`; failure paths leave consistent `imports`/`jobs` rows.
+- [x] `fixture_builder.py` v1: variants A/B, HTML export, zip-slip + zip-bomb fixtures (plus corrupted/empty/unrecognized/not-a-zip), stdlib-only with a CLI for e2e.
+- [x] Frontend: import screen (upload, list, detail with job progress polling).
 
-Acceptance criteria:
-- [ ] Valid synthetic ZIP uploads reach `scanned` status (stub counts).
-- [ ] Zip-slip and zip-bomb fixtures rejected with clean errors and **zero files left on disk** (asserted by test).
-- [ ] Oversized upload rejected before the body is fully read.
-- [ ] HTML export produces the actionable rejection message.
-- [ ] Re-uploading the same ZIP is detected via checksum.
-- [ ] Every rejection branch has a test.
+Acceptance criteria (verified locally against the compose stack 2026-07-16; CI
+run still required — no commit has been made yet):
+- [x] Valid synthetic ZIP uploads reach `scanned` status (stub counts).
+- [x] Zip-slip and zip-bomb fixtures rejected with clean errors and **zero files left on disk** (asserted by test).
+- [x] Oversized upload rejected before the body is fully read.
+- [x] HTML export produces the actionable rejection message.
+- [x] Re-uploading the same ZIP is detected via checksum.
+- [x] Every rejection branch has a test.
 
 Test commands:
 ```bash

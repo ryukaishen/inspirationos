@@ -41,6 +41,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       DATA_DIR: /app/var/data
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-2048}
+      MAX_ZIP_ENTRIES: ${MAX_ZIP_ENTRIES:-100000}
+      MAX_ZIP_UNCOMPRESSED_MB: ${MAX_ZIP_UNCOMPRESSED_MB:-10240}
+      MAX_ZIP_COMPRESSION_RATIO: ${MAX_ZIP_COMPRESSION_RATIO:-100}
     ports:
       - "8000:8000"
     volumes:

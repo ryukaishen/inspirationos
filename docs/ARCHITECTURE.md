@@ -101,6 +101,51 @@ inspiration-os/
   and resumability; cancellation flag checked between chunks.
 - Job payloads contain **IDs only, never message content**.
 
+## Upload & storage (M2)
+
+**Endpoint shape:** `POST /api/imports/upload?filename=<display name>` takes the
+ZIP as the **raw request body**, not multipart. Rationale: FastAPI/starlette
+parse a multipart body in full before endpoint code runs, which would defeat
+the requirement to reject oversized uploads *before the body is fully read*.
+With a raw body the endpoint checks `Content-Length` first (413 with zero bytes
+read) and, for chunked/lying clients, streams chunk-by-chunk to a spool file —
+hashing (SHA-256) and counting as it goes — aborting the moment the cap is
+crossed. `filename` is sanitized display metadata only (basename, control
+chars stripped, 255-char cap); storage keys are server-generated UUIDs.
+
+**Validation order** (all on the spool file, before anything is persisted):
+size cap → checksum dedupe pre-check → ZIP validity → zip-slip entry names
+(absolute paths, drive letters, `..` in `/` or `\` separators) → zip-bomb caps
+(entry count, total declared uncompressed size, per-entry compression ratio
+with a 1 MB floor) → export-format detection from entry **names** only.
+Central-directory metadata is all that is read — the archive is never
+extracted and no entry contents are opened at upload time.
+
+**Transaction-safe acceptance sequence:** promote spool → stored key
+(`os.replace`, same volume) → **one DB transaction** inserting the `imports`
+row plus its single `import_scan` `jobs` row → enqueue. Failure mapping:
+duplicate insert (partial unique index on active checksums — the authoritative,
+race-safe dedupe) → 409 + promoted file deleted; any other DB failure → 500 +
+promoted file deleted, no rows; enqueue failure → both rows `failed`, ZIP
+retained for recovery. The spool file is removed in `finally` on every path;
+cleanup-time storage errors never mask the primary error. Rejected archives
+(slip/bomb/not-a-zip/unrecognized) leave zero rows and zero files; HTML exports
+leave a `failed` row (`export_format=html_detected`, no file) so the rejection
+is visible in the import list, with the actionable "re-request as JSON"
+message.
+
+**Storage abstraction:** `services/storage/base.py` defines a `Storage`
+protocol (`spool_dir`, `save_file`, `open`, `exists`, `size`, `delete` — delete
+is idempotent); `local.py` implements it rooted at `DATA_DIR` with a
+resolved-path containment guard. An S3-compatible adapter can slot in later
+without changing the upload flow.
+
+**Scan job stub (M2):** `run_import_scan` proves the pipeline end-to-end —
+import `uploaded→scanning→scanned` with counts from entry names
+(`total_entries`, `message_files`); real conversation summaries replace the
+stub in M3. Failures mark both the job and the import `failed` with the
+exception class name only.
+
 ## Instagram parsing
 
 Export realities handled (each with a synthetic fixture):

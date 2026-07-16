@@ -26,9 +26,23 @@ ZIPs at test time (nothing export-like is committed):
 - Shared reels/posts (`share.link` + URLs inside `content`), including exact
   duplicates and tracking-parameter variants.
 - An HTML-format export (must be rejected).
-- Malicious pair: zip-slip (path traversal entries) and zip-bomb (extreme
-  compression ratio / entry count).
+- Malicious pair: zip-slip (path traversal entries, `/` and `\` separators,
+  absolute and drive-letter paths) and zip-bomb (extreme compression ratio /
+  entry count / total declared size); plus not-a-zip, corrupted
+  central-directory, empty, and unrecognized ZIPs.
 - A ~5,000-message export for performance tests (built on demand).
+
+The builder is **stdlib-only** and doubles as a CLI so Playwright can generate
+fixtures without installing backend dependencies —
+`e2e/global-setup.ts` runs it before every e2e session:
+
+```bash
+python backend/tests/fixture_builder.py --out e2e/.fixtures --unique 12345
+```
+
+`--unique` varies message text (and therefore checksums) per run so the
+dedupe flow stays testable against a long-lived dev stack. Generated ZIPs land
+in gitignored paths only.
 
 Every real-world quirk discovered in M10 gets a new synthetic fixture
 reproducing it before the fix is considered done.

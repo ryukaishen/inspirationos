@@ -4,6 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 // frontend on :3000 proxying /api/* to the backend, worker consuming queues.
 export default defineConfig({
   testDir: "./specs",
+  globalSetup: "./global-setup.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
