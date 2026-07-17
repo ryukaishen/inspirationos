@@ -28,6 +28,10 @@ class AppConfig(BaseSettings):
     max_zip_uncompressed_mb: int = 10_240
     max_zip_compression_ratio: int = 100
 
+    # Same-sender messages within ± this window around a shared link are
+    # concatenated into the item's adjacent_text (see services/ingest/instagram/).
+    adjacent_text_window_seconds: int = 120
+
 
 @lru_cache
 def get_config() -> AppConfig:

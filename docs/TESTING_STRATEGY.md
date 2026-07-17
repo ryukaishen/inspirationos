@@ -17,6 +17,12 @@ ZIPs at test time (nothing export-like is committed):
 
 - **Variant A** — current layout (`your_instagram_activity/messages/inbox/…`).
 - **Variant B** — legacy layout (`messages/inbox/…`).
+- **Rich export** (`build_rich_export_zip`, emitted by the CLI as
+  `rich_a.zip`/`rich_b.zip`) — identical logical content in both layouts:
+  a paginated friend thread, a self-DM thread, adjacent-window hits and
+  misses, exact + tracking-parameter duplicates, an external link, and
+  mojibake strings whose exact expected decodings are exported as module
+  constants for test assertions.
 - Mojibake/emoji strings (UTF-8-as-latin-1 escapes) with known expected
   decodings.
 - Multi-file paginated threads (`message_1.json`, `message_2.json`).

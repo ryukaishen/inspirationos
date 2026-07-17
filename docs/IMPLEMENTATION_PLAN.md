@@ -91,22 +91,23 @@ cd e2e && npx playwright test specs/import.spec.ts
 deduplicated — correctly, idempotently, for multiple export structures.
 
 Scope:
-- [ ] Scan pass: stream ZIP, persist conversation summaries (title, participants, message/link counts, date range) — no message bodies.
-- [ ] Owner-name detection (`personal_information.json`, fallback: common participant) + self-DM candidate flagging.
-- [ ] Mojibake fix (`encoding.py`) applied to all strings.
-- [ ] Conversations API + selection endpoint; extract pass persists messages/items **only for selected conversations**.
-- [ ] Link extraction (`share.link` + regex in `content`), canonicalization, shortcode, item_type.
-- [ ] Adjacent-text windows (same sender, ±120s configurable).
-- [ ] Exact dedupe into `duplicate_groups` (same shortcode / canonical URL).
-- [ ] Fixtures: paginated threads, missing fields, self-DM present/absent, emoji/mojibake, duplicates.
+- [x] Scan pass: stream ZIP, persist conversation summaries (title, participants, message/link counts, date range) — no message bodies.
+- [x] Owner-name detection (`personal_information.json`, fallback: common participant) + self-DM candidate flagging.
+- [x] Mojibake fix (`encoding.py`) applied to all strings.
+- [x] Conversations API + selection endpoint; extract pass persists messages/items **only for selected conversations**.
+- [x] Link extraction (`share.link` + regex in `content`), canonicalization, shortcode, item_type.
+- [x] Adjacent-text windows (same sender, ±120s configurable).
+- [x] Exact dedupe into `duplicate_groups` (same shortcode / canonical URL).
+- [x] Fixtures: paginated threads, missing fields, self-DM present/absent, emoji/mojibake, duplicates.
 
-Acceptance criteria:
-- [ ] Variant A and B fixtures parse to identical logical results.
-- [ ] Mojibake/emoji strings round-trip to exact expected values.
-- [ ] Self-DM fixture flagged as candidate; no-self-DM fixture yields none.
-- [ ] Fixture counts (conversations/messages/links/duplicates) match DB exactly.
-- [ ] Re-running extract is idempotent — no duplicate items.
-- [ ] Messages exist in DB only for selected conversations.
+Acceptance criteria (verified locally against the compose stack 2026-07-17; CI
+run still required — no commit has been made yet):
+- [x] Variant A and B fixtures parse to identical logical results.
+- [x] Mojibake/emoji strings round-trip to exact expected values.
+- [x] Self-DM fixture flagged as candidate; no-self-DM fixture yields none.
+- [x] Fixture counts (conversations/messages/links/duplicates) match DB exactly.
+- [x] Re-running extract is idempotent — no duplicate items.
+- [x] Messages exist in DB only for selected conversations.
 
 Test commands:
 ```bash

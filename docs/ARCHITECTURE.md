@@ -140,11 +140,32 @@ is idempotent); `local.py` implements it rooted at `DATA_DIR` with a
 resolved-path containment guard. An S3-compatible adapter can slot in later
 without changing the upload flow.
 
-**Scan job stub (M2):** `run_import_scan` proves the pipeline end-to-end —
-import `uploaded→scanning→scanned` with counts from entry names
-(`total_entries`, `message_files`); real conversation summaries replace the
-stub in M3. Failures mark both the job and the import `failed` with the
-exception class name only.
+**Scan job (M3, replaces the M2 stub):** `run_import_scan` streams the stored
+ZIP (never extracted), parses one thread at a time, and persists
+`conversations` summaries only — title, participants, message/link counts,
+date range — upserted by `(import_id, thread_path)` so retries never
+duplicate and `is_selected` survives a re-scan. Message bodies are read in
+memory solely to count links; none are persisted. Owner detection
+(`personal_information.json`, else the participant common to all threads)
+flags self-DM *candidates*. `imports.counts` keeps the M2 keys
+(`total_entries`, `message_files` — the frontend/e2e contract) and adds
+`conversations`/`messages`/`links`. Failures mark both the job and the import
+`failed` with the exception class name only.
+
+**Selection & extract (M3):** `GET /api/imports/{id}/conversations` lists the
+scanned summaries; `POST /api/imports/{id}/conversations/selection` takes
+`{"conversation_ids": [...]}` with **replace semantics** (listed → selected,
+all others deselected), inserts the `import_extract` jobs row (payload: IDs
+only) and enqueues it — enqueue failure marks the job failed and returns 503,
+mirroring the upload endpoint. A `failed` import with a stored file stays
+selectable so a failed extract can be retried. `run_import_extract` re-reads
+the retained ZIP and, per selected conversation in its own transaction
+(visible progress, resumable), delete-and-reinserts `messages` + `items` —
+re-running converges to identical rows, and deselected conversations lose
+their rows, keeping the "messages exist only for selected conversations"
+invariant. Exact duplicate groups are rebuilt from scratch across the import
+at the end (canonical item = earliest share); `imports.counts` gains
+`extracted_messages`/`items`/`duplicate_groups`.
 
 ## Instagram parsing
 
@@ -153,8 +174,11 @@ Export realities handled (each with a synthetic fixture):
   (current) and legacy `messages/inbox/…`; multiple paginated
   `message_N.json` per thread (reverse-chronological).
 - **Mojibake:** Instagram encodes UTF-8 bytes as latin-1 escapes. Every string
-  passes through `s.encode('latin-1', 'ignore').decode('utf-8', 'ignore')`
-  with safe fallback; emoji/non-ASCII names are explicit test cases.
+  passes through a **strict** `s.encode('latin-1').decode('utf-8')` round-trip
+  that falls back to the original string on any `UnicodeError` — strict rather
+  than `errors='ignore'`, which would silently delete characters from strings
+  that are already correct Unicode. Emoji/non-ASCII names are explicit test
+  cases.
 - Message shapes: plain `content`, `share {link, share_text,
   original_content_owner}`, missing fields, unsent, media-only.
 - HTML-format exports: detected and rejected with "re-request as JSON."

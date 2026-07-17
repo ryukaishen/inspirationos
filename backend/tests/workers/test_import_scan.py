@@ -1,4 +1,4 @@
-"""Import-scan stub job against real Postgres + Redis.
+"""Import-scan job against real Postgres + Redis.
 
 The happy path runs through the production enqueue path (dotted string) and an
 RQ SimpleWorker; failure and idempotency paths call the task directly.
@@ -8,13 +8,14 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
-from fixture_builder import build_variant_a_zip
+from fixture_builder import FRIEND_NAME, OWNER_NAME, build_variant_a_zip
 from redis import Redis
 from rq import Queue, SimpleWorker
-from sqlalchemy import Engine
+from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_config
+from app.models.conversation import Conversation
 from app.models.import_ import ExportFormat, Import, ImportStatus
 from app.models.job import Job, JobKind, JobStatus
 from app.queues import QUEUE_IMPORTS
@@ -70,6 +71,8 @@ def make_import(pg_engine: Engine) -> Generator[MakeImport, None, None]:
 
     yield _make
     with Session(pg_engine) as session:
+        if created_imports:  # the real scan writes conversation summaries
+            session.execute(delete(Conversation).where(Conversation.import_id.in_(created_imports)))
         for job_id in created_jobs:
             row = session.get(Job, job_id)
             if row is not None:
@@ -102,7 +105,7 @@ def _reload(pg_engine: Engine, job_id: int, import_id: int) -> tuple[Job, Import
         return job, import_row
 
 
-def test_scan_reaches_scanned_with_stub_counts(
+def test_scan_reaches_scanned_with_conversation_summaries(
     make_import: MakeImport,
     scan_storage: LocalStorage,
     imports_queue: Queue,
@@ -122,8 +125,26 @@ def test_scan_reaches_scanned_with_stub_counts(
     assert job.progress == job.total == 1
     assert job.error is None
     assert import_row.status is ImportStatus.scanned
-    # variant A: message_1.json + personal_information.json
-    assert import_row.counts == {"total_entries": 2, "message_files": 1}
+    # variant A: message_1.json + personal_information.json; the thread holds
+    # one share link and one URL inside message content
+    assert import_row.counts == {
+        "total_entries": 2,
+        "message_files": 1,
+        "conversations": 1,
+        "messages": 2,
+        "links": 2,
+    }
+
+    with Session(pg_engine) as session:
+        conversation = session.scalars(
+            select(Conversation).where(Conversation.import_id == import_id)
+        ).one()
+        assert conversation.title == FRIEND_NAME
+        assert conversation.participant_names == [OWNER_NAME, FRIEND_NAME]
+        assert conversation.message_count == 2
+        assert conversation.link_count == 2
+        assert conversation.is_self_dm_candidate is False
+        assert conversation.is_selected is False
 
 
 def test_scan_failure_records_redacted_error_on_both_rows(
