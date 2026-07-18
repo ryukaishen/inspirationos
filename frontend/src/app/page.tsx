@@ -12,6 +12,18 @@ export default function Home() {
           <Link className="underline" href="/import">
             Import an Instagram export
           </Link>
+          {" · "}
+          <Link className="underline" href="/inbox">
+            Browse the inbox
+          </Link>
+          {" · "}
+          <Link className="underline" href="/review">
+            Fast review
+          </Link>
+          {" · "}
+          <Link className="underline" href="/settings">
+            Settings
+          </Link>
         </p>
       </div>
       <HealthStatus />

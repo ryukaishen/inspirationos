@@ -1,6 +1,7 @@
 from app.models.app_settings import AiProvider, AppSettings
 from app.models.base import Base
 from app.models.conversation import Conversation
+from app.models.enrichment_attempt import EnrichmentAttempt, EnrichmentSource, EnrichmentStatus
 from app.models.import_ import ExportFormat, Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item, ItemStatus, ItemType
 from app.models.job import Job, JobKind, JobStatus
@@ -14,6 +15,9 @@ __all__ = [
     "Conversation",
     "DuplicateGroup",
     "DuplicateReason",
+    "EnrichmentAttempt",
+    "EnrichmentSource",
+    "EnrichmentStatus",
     "ExportFormat",
     "Import",
     "ImportStatus",

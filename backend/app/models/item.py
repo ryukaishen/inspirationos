@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, UpdatedAtMixin
+from app.models.enrichment_attempt import EnrichmentSource
 
 
 class ItemType(enum.Enum):
@@ -101,6 +102,13 @@ class Item(Base, CreatedAtMixin, UpdatedAtMixin):
     enriched_title: Mapped[str | None] = mapped_column(Text)
     enriched_caption: Mapped[str | None] = mapped_column(Text)
     enriched_author: Mapped[str | None] = mapped_column(Text)
+    enriched_source: Mapped[EnrichmentSource | None] = mapped_column(
+        Enum(
+            EnrichmentSource,
+            name="enrichment_source",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+    )
     context_note: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ItemStatus] = mapped_column(
         Enum(ItemStatus, name="item_status", values_callable=lambda e: [m.value for m in e]),

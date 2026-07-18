@@ -122,21 +122,22 @@ cd backend && python -m pytest tests/unit/test_encoding.py tests/unit/test_links
 **Goal:** the extracted items are browsable, searchable, and bulk-manageable.
 
 Scope:
-- [ ] Conversation selector UI (names, counts, self-DM confirmation).
-- [ ] Inbox: reel cards (type badge, timestamp, share/adjacent text, status, tags, note) with server-side pagination.
-- [ ] Search (Postgres full-text over share/adjacent text + notes).
-- [ ] Filters: status, type, tags, conversation, date range.
-- [ ] Duplicate-group visualization (grouped card with count).
-- [ ] Status transitions; notes and tags editing; bulk select + bulk status/tag.
-- [ ] Accessibility smoke (axe) on inbox and selector.
+- [x] Conversation selector UI (names, counts, self-DM confirmation).
+- [x] Inbox: reel cards (type badge, timestamp, share/adjacent text, status, tags, note) with server-side pagination.
+- [x] Search (Postgres full-text over share/adjacent text + notes).
+- [x] Filters: status, type, tags, conversation, date range.
+- [x] Duplicate-group visualization (grouped card with count).
+- [x] Status transitions; notes and tags editing; bulk select + bulk status/tag.
+- [x] Accessibility smoke (axe) on inbox and selector.
 
-Acceptance criteria:
-- [ ] Playwright: upload → select conversation → inbox renders expected fixture items.
-- [ ] Search finds an item by adjacent text.
-- [ ] Each filter provably narrows results (asserted counts).
-- [ ] A duplicate group renders as one group of N.
-- [ ] Bulk status change on a multi-selection persists.
-- [ ] axe reports no critical violations on inbox/selector.
+Acceptance criteria (verified locally against the compose stack 2026-07-18;
+CI run still required — no commit has been made yet):
+- [x] Playwright: upload → select conversation → inbox renders expected fixture items.
+- [x] Search finds an item by adjacent text.
+- [x] Each filter provably narrows results (asserted counts).
+- [x] A duplicate group renders as one group of N.
+- [x] Bulk status change on a multi-selection persists.
+- [x] axe reports no critical violations on inbox/selector.
 
 Test commands:
 ```bash
@@ -153,21 +154,22 @@ cd e2e && npx playwright test specs/inbox.spec.ts
 that manual context entry is painless.
 
 Scope:
-- [ ] Consent gate: Settings toggle + dialog disclosing network use; consent timestamp stored.
-- [ ] Per-item / per-selection / per-group / per-cluster "Enrich" actions only — no global crawl.
-- [ ] Fetcher: oEmbed → OG fallback, rate limit, timeouts, backoff, circuit breaker, result caching, `enrichment_attempts` audit.
-- [ ] `needs_context` auto-assignment for text-poor items; code-level exclusion of such items from AI-generation input.
-- [ ] Open-original button (new tab).
-- [ ] Fast review mode: j/k navigate, o open, e edit note, Enter save+advance, s skip, number keys set status; needs-context-first ordering.
-- [ ] Bulk notes/tags over selections and duplicate groups.
+- [x] Consent gate: Settings toggle + dialog disclosing network use; consent timestamp stored.
+- [x] Per-item / per-selection / per-group "Enrich" actions only — no global crawl. (Per-cluster is the same `item_ids`-based endpoint; clusters themselves don't exist until M6, so there's no cluster UI to wire it to yet.)
+- [x] Fetcher: oEmbed → OG fallback, rate limit, timeouts, backoff, circuit breaker, result caching, `enrichment_attempts` audit.
+- [x] `needs_context` auto-assignment for text-poor items; code-level exclusion of such items from AI-generation input.
+- [x] Open-original button (new tab).
+- [x] Fast review mode: j/k navigate, o open, e edit note, Enter save+advance, s skip, number keys set status; needs-context-first ordering.
+- [x] Bulk notes/tags over selections and duplicate groups.
 
-Acceptance criteria:
-- [ ] With enrichment disabled (default), no outbound request occurs anywhere (respx assertion).
-- [ ] Enabling the toggle alone triggers zero requests; only explicit Enrich actions do.
-- [ ] Success / blocked / 404 paths all recorded in `enrichment_attempts`; cached results not re-fetched; UI labels enriched fields by source.
-- [ ] A text-poor fixture item lands in `needs_context` and never reaches generation input (unit-enforced).
-- [ ] Playwright drives the full keyboard review loop without mouse.
-- [ ] A bulk note applies to every member of a duplicate group.
+Acceptance criteria (verified locally against the compose stack 2026-07-19;
+CI run still required — no commit has been made yet):
+- [x] With enrichment disabled (default), no outbound request occurs anywhere (respx assertion).
+- [x] Enabling the toggle alone triggers zero requests; only explicit Enrich actions do.
+- [x] Success / blocked / 404 paths all recorded in `enrichment_attempts`; cached results not re-fetched; UI labels enriched fields by source.
+- [x] A text-poor fixture item lands in `needs_context` and never reaches generation input (unit-enforced).
+- [x] Playwright drives the full keyboard review loop without mouse.
+- [x] A bulk note applies to every member of a duplicate group.
 
 Test commands:
 ```bash

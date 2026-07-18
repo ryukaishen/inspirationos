@@ -211,16 +211,119 @@ time (repeat timestamps kept as a signal). Near-duplicate *text* grouping via
 embedding cosine threshold arrives with M6 and feeds the same
 `duplicate_groups` mechanism.
 
-## Metadata enrichment (consent-gated; see PRIVACY_SECURITY.md)
+## Inbox: browsing, search, filters (M4)
 
-Order per item: (1) Instagram oEmbed, (2) OpenGraph tags from the public page
-— anonymous GET, honest User-Agent, no login/cookies/headless/CAPTCHA. Token-
-bucket rate limit (~1 req/3s default), timeouts, exponential backoff, circuit
-breaker after N consecutive blocks, caching (successes and permanent 404s are
-never re-fetched), every attempt audited in `enrichment_attempts`.
-Limitations are documented in UI copy: expect low hit rates; Instagram blocks
-anonymous access aggressively; captions often unavailable. Enriched fields are
-stored separately (`enriched_*`) and labeled by source.
+`GET /api/items` (`app/api/items.py`) is the read/search surface over
+extracted items. **Grouped pagination:** a row is included only if
+`duplicate_group_id IS NULL` or the item is its group's canonical item
+(earliest share) — every duplicate group therefore renders as exactly one
+entry, with `duplicate_count` computed via one follow-up `GROUP BY` query
+over the page's group ids (not a per-row correlated subquery). This keeps
+pagination totals and "a filter narrows results" counts exact and avoids a
+duplicate group ever splitting across pages. `GET /api/items/facets` reuses
+the same canonical-only restriction to populate filter UI (distinct
+conversations, distinct tags with counts) but is **unfiltered** by the
+current search/filter state — a static reference list, not a live
+cross-filter recount.
+
+**Full-text search:** `to_tsvector('english', coalesce(share_text,'') || ' '
+|| coalesce(adjacent_text,'') || ' ' || coalesce(context_note,'')) @@
+plainto_tsquery('english', :q)`, backed by the `ix_items_fts` GIN expression
+index (migration `0004`). Uses `coalesce(...) || ...` rather than
+`concat(...)`: `concat()` is not IMMUTABLE-eligible for a Postgres
+expression index (confirmed against a live database — `CREATE INDEX`
+fails with "functions in index expression must be marked IMMUTABLE").
+
+**Editing:** `PATCH /api/items/{id}` applies only the fields present in the
+request body (`exclude_unset=True` — a partial update, not a full replace).
+`POST /api/items/bulk` applies a status, tag-union, and/or note across a
+selected id list; tag writes always reassign a new list (`Item.tags` is a
+plain `ARRAY(Text)`, not `MutableList`-tracked, so in-place `.append()` would
+silently fail to persist). Both routes act on canonical items only for their
+literal `item_ids` — **M5** adds an optional `duplicate_group_ids` field
+(shared `_expand_item_ids` helper, also used by the enrich-trigger endpoint)
+that expands to every member of the given groups, so a bulk note/tag/status
+action can explicitly reach a whole "shared again" group, not just its
+canonical (visible) row, while per-single-item editing still defaults to
+canonical-only.
+
+The frontend conversation-selector page (`/import/[id]/conversations`)
+drives M3's existing selection API; every checkbox (self-DM candidate or
+not) initializes from that conversation's own `is_selected`, which already
+defaults to `false` server-side — so "never assume a self-DM candidate" and
+"restore a prior partial selection on retry" both fall out for free without
+special-casing. The inbox (`/inbox`) keeps all filter/search/page state in
+the URL (`lib/item-filters.ts` — pure parse/serialize helpers, framework-free
+and independently unit-tested) so it's shareable and drives Playwright
+assertions directly against rendered counts.
+
+## Metadata enrichment (consent-gated; see PRIVACY_SECURITY.md) — M5
+
+**Consent gate:** `settings.enrichment_enabled`/`enrichment_consent_at`
+(`app/api/settings.py`, `GET /api/settings` + `PATCH /api/settings/enrichment`)
+— enabling for the first time (false→true) stamps the consent timestamp;
+disabling keeps it as history. The endpoint only ever flips the flag — it
+never enqueues anything, so toggling alone triggers zero requests. The
+frontend gates the toggle behind a disclosure dialog
+(`frontend/src/app/settings/page.tsx`).
+
+**Trigger:** `POST /api/items/enrich` (`item_ids` and/or `duplicate_group_ids`,
+expanded server-side by the same `_expand_item_ids` helper the bulk-update
+endpoint uses) — 403s before any row is created if consent isn't given, so no
+outbound request ever occurs while enrichment is off. Otherwise creates an
+`enrich_batch` `jobs` row and enqueues `run_enrich_batch` onto the
+`enrichment` queue, mirroring the imports.py job-row-then-enqueue convention.
+One endpoint shape serves per-item, per-selection, and per-group actions; a
+future per-cluster action (M6) needs no new code, just its own member
+item_ids.
+
+**Fetcher** (`app/services/enrichment/fetcher.py`): order per item is (1)
+Instagram oEmbed, (2) OpenGraph tags from the public page — anonymous GET,
+honest User-Agent, no login/cookies/headless/CAPTCHA. Transient
+(connect/timeout) errors retry on a fixed backoff schedule (3 attempts:
+0s/1s/2s); a definitive HTTP response (success, 404, or a block) is never
+retried.
+
+**Policy** (`app/services/enrichment/policy.py`): a `TokenBucket` rate limits
+requests (`enrichment_requests_per_minute`, default 20/min ≈ 1 req/3s); a
+`CircuitBreaker` trips after N consecutive `blocked` classifications
+(`enrichment_circuit_breaker_threshold`, default 5) — scoped to one
+`run_enrich_batch` call, so every new batch starts closed. Once tripped,
+remaining sources are recorded `disabled` with zero further HTTP calls.
+`classify_response` maps outcomes: 200 → `success`, 404 → `not_found`,
+401/403/429/999 → `blocked`, exhausted retries → `error`. Every attempted
+(non-cached) source is audited in `enrichment_attempts`; a source with an
+existing `success`/`not_found` row is never re-fetched, and an item that
+already succeeded via an earlier source on a prior run is skipped entirely
+(not just per-source caching — see DATA_MODEL.md). On success, `enriched_*`
+fields are updated (only non-null fetched values overwrite) and
+`enriched_source` records which source produced them, so the UI can label
+fields "via oEmbed"/"via OpenGraph". Limitations are documented in UI copy:
+expect low hit rates; Instagram blocks anonymous access aggressively;
+captions often unavailable.
+
+**`needs_context` auto-assignment:** `policy.initial_status_for` (also used
+by the M3 extract pipeline, `services/ingest/instagram/parser.py`) assigns
+`needs_context` to a freshly extracted item with no `share_text`/
+`adjacent_text` at all, `new` otherwise. `policy.is_eligible_for_generation`
+is the anti-hallucination predicate from DATA_MODEL.md — implemented here
+(not a not-yet-existing `generation/` package) since M5 tests it directly;
+M6/M7 import this same function rather than re-implementing it.
+
+## Fast review mode — M5
+
+`frontend/src/app/review/page.tsx` fetches `GET /api/items?status=new&
+status=needs_context&order=needs_context_first` (the `order` param is
+additive to M4's `list_items` — default behavior/tests unaffected) and walks
+a single loaded batch one item at a time. Keyboard handling is a pure keymap
+(`frontend/src/lib/review-keyboard.ts::mapKeyToAction`, unit-tested) wired by
+a thin hook (`use-review-keyboard.ts`): `j`/`k` navigate, `o` opens the
+original in a new tab, `e` focuses the note field, `Enter` always saves the
+note + sets status `reviewed` + advances (notes are one-sentence, so Enter
+never needs to insert a newline), `s` skips, `1`–`5` set a status directly
+(matching `ITEM_STATUSES` order). While the note field has focus, only
+`Enter`/`Escape` are intercepted — every other key types normally, so
+shortcuts never hijack note text.
 
 ## AI generation & structured output
 

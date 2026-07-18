@@ -12,7 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.models.item import Item, ItemType
+from app.models.item import Item, ItemStatus, ItemType
+from app.services.enrichment.policy import initial_status_for
 from app.services.ingest.instagram.export_reader import ParsedMessage, ParsedThread
 from app.services.ingest.instagram.links import CanonicalLink, canonicalize, extract_urls
 
@@ -46,6 +47,7 @@ class ItemDraft:
     shared_at: datetime
     share_text: str | None
     adjacent_text: str | None
+    status: ItemStatus
 
 
 def to_datetime(timestamp_ms: int) -> datetime:
@@ -122,6 +124,7 @@ def build_item_drafts(thread: ParsedThread, window_seconds: int) -> list[ItemDra
                     shared_at=to_datetime(message.timestamp_ms),
                     share_text=message.share_text,
                     adjacent_text=adjacent,
+                    status=initial_status_for(message.share_text, adjacent),
                 )
             )
     return drafts

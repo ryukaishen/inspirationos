@@ -24,7 +24,7 @@ from fixture_builder import (
 )
 from redis import Redis
 from rq import Queue
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.imports import (
@@ -34,8 +34,11 @@ from app.api.imports import (
     get_upload_policy,
 )
 from app.main import app
+from app.models.conversation import Conversation
 from app.models.import_ import ExportFormat, Import, ImportStatus
+from app.models.item import DuplicateGroup, Item
 from app.models.job import Job, JobKind, JobStatus
+from app.models.message import Message
 from app.queues import QUEUE_IMPORTS
 from app.services.ingest.zip_safety import ZipLimits
 from app.services.storage.local import LocalStorage
@@ -60,12 +63,25 @@ def clean_queue(redis_client: Redis) -> Generator[None, None, None]:
 
 @pytest.fixture(autouse=True)
 def isolate_imports_table(db_session: Session) -> None:
-    """E2E runs against the same dev DB leave committed imports/jobs rows.
+    """E2E/manual-verification runs against the same dev DB leave committed
+    imports and their M3 dependents (conversations/messages/items/duplicate
+    groups) rows.
 
     Clear them *inside* this test's outer transaction (rolled back afterwards,
     so dev data survives) so count-based assertions see only this test's rows.
+    Deletion order respects the FKs M3 added: null out items.duplicate_group_id
+    (breaks the items<->duplicate_groups circular FK) before deleting
+    duplicate_groups, then items, then messages, then conversations, then
+    imports — mirrors `tests/api/test_parser_pipeline.py`'s `_purge_imports`.
     """
-    db_session.execute(delete(Job).where(Job.kind == JobKind.import_scan))
+    db_session.execute(update(Item).values(duplicate_group_id=None))
+    db_session.execute(delete(DuplicateGroup))
+    db_session.execute(delete(Item))
+    db_session.execute(delete(Message))
+    db_session.execute(delete(Conversation))
+    db_session.execute(
+        delete(Job).where(Job.kind.in_([JobKind.import_scan, JobKind.import_extract]))
+    )
     db_session.execute(delete(Import))
     db_session.commit()
 

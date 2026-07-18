@@ -5,7 +5,12 @@ import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FINISHED_IMPORT_STATUSES, getImport } from "@/lib/api";
+import { FINISHED_IMPORT_STATUSES, getImport, type ImportStatus } from "@/lib/api";
+
+// Mirrors backend's SELECTABLE_STATUSES in app/api/conversations.py — a
+// failed import with a stored file stays selectable so a failed extract can
+// be retried.
+const SELECTABLE_IMPORT_STATUSES: readonly ImportStatus[] = ["scanned", "extracted", "failed"];
 
 export default function ImportDetailPage() {
   const params = useParams<{ id: string }>();
@@ -70,6 +75,16 @@ export default function ImportDetailPage() {
                   </span>
                 </div>
               )}
+              {/* html_detected imports never have a stored file (mirrors the
+                  backend's no_stored_file guard in conversations.py) */}
+              {detail.export_format === "json" &&
+                SELECTABLE_IMPORT_STATUSES.includes(detail.status) && (
+                  <p className="pt-2">
+                    <Link className="underline" href={`/import/${importId}/conversations`}>
+                      Select conversations →
+                    </Link>
+                  </p>
+                )}
             </>
           )}
         </CardContent>

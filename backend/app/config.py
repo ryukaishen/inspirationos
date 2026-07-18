@@ -32,6 +32,16 @@ class AppConfig(BaseSettings):
     # concatenated into the item's adjacent_text (see services/ingest/instagram/).
     adjacent_text_window_seconds: int = 120
 
+    # Metadata enrichment (off by default; consent-gated in Settings — see
+    # services/enrichment/). Ceilings/defaults only, not the on/off switch.
+    enrichment_requests_per_minute: int = 20
+    enrichment_timeout_seconds: int = 10
+    # Consecutive "blocked" (401/403/429/999) responses within one batch run
+    # that trip the circuit breaker; remaining items are recorded `disabled`
+    # with zero further HTTP calls.
+    enrichment_circuit_breaker_threshold: int = 5
+    enrichment_user_agent: str = "InspirationOS/1.0 (personal project; anonymous metadata fetch)"
+
 
 @lru_cache
 def get_config() -> AppConfig:

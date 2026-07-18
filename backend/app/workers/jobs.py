@@ -15,11 +15,15 @@ from sqlalchemy.orm import Session
 
 from app.config import get_config
 from app.db import get_sessionmaker
+from app.models.app_settings import AppSettings
 from app.models.conversation import Conversation
+from app.models.enrichment_attempt import EnrichmentAttempt, EnrichmentSource, EnrichmentStatus
 from app.models.import_ import Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item
 from app.models.job import Job, JobStatus
 from app.models.message import Message
+from app.services.enrichment import policy as enrichment_policy
+from app.services.enrichment.fetcher import EnrichmentFetcher, HttpEnrichmentFetcher
 from app.services.ingest.format_detection import count_message_json_files
 from app.services.ingest.instagram.export_reader import (
     iter_threads,
@@ -265,6 +269,7 @@ def run_import_extract(job_id: int, import_id: int) -> None:
                             shared_at=draft.shared_at,
                             share_text=draft.share_text,
                             adjacent_text=draft.adjacent_text,
+                            status=draft.status,
                         )
                         for draft in drafts
                     )
@@ -300,4 +305,133 @@ def run_import_extract(job_id: int, import_id: int) -> None:
             session.commit()
         except Exception as exc:
             _fail_job_and_import(session, job, import_id, exc)
+            raise
+
+
+def _cached_attempt_exists(session: Session, item_id: int, source: EnrichmentSource) -> bool:
+    """True if (item, source) already has a `success`/`not_found` attempt —
+    permanent outcomes are never re-fetched."""
+    return (
+        session.scalar(
+            select(EnrichmentAttempt.id)
+            .where(
+                EnrichmentAttempt.item_id == item_id,
+                EnrichmentAttempt.source == source,
+                EnrichmentAttempt.status.in_(
+                    (EnrichmentStatus.success, EnrichmentStatus.not_found)
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _enrich_one_item(
+    session: Session,
+    item: Item,
+    fetcher: EnrichmentFetcher,
+    bucket: enrichment_policy.TokenBucket,
+    breaker: enrichment_policy.CircuitBreaker,
+) -> None:
+    """oEmbed, then OpenGraph fallback; stops at the first success.
+
+    Every attempted (non-cached) source is audited. Once the breaker is
+    open, remaining sources are recorded `disabled` with zero HTTP calls. An
+    item that already succeeded via an earlier source on a prior run is
+    skipped entirely — per-source caching alone wouldn't catch this, since a
+    source after the one that already succeeded was never attempted (and so
+    never cached) in that prior run.
+    """
+    if item.enriched_source is not None:
+        return
+    for source, fetch in (
+        (EnrichmentSource.oembed, fetcher.fetch_oembed),
+        (EnrichmentSource.og, fetcher.fetch_og),
+    ):
+        if _cached_attempt_exists(session, item.id, source):
+            continue
+        if breaker.is_open:
+            session.add(
+                EnrichmentAttempt(item_id=item.id, source=source, status=EnrichmentStatus.disabled)
+            )
+            continue
+        bucket.acquire()
+        result = fetch(item.url_raw)
+        outcome = enrichment_policy.classify_response(result.http_status, result.exc)
+        breaker.record(outcome)
+        session.add(
+            EnrichmentAttempt(
+                item_id=item.id,
+                source=source,
+                status=outcome,
+                http_status=result.http_status,
+                fetched_title=result.title,
+                fetched_caption=result.caption,
+                fetched_author=result.author,
+                error=type(result.exc).__name__ if result.exc is not None else None,
+            )
+        )
+        if outcome is EnrichmentStatus.success:
+            if result.title:
+                item.enriched_title = result.title
+            if result.caption:
+                item.enriched_caption = result.caption
+            if result.author:
+                item.enriched_author = result.author
+            item.enriched_source = source
+            return
+
+
+def run_enrich_batch(job_id: int, item_ids: list[int]) -> None:
+    """Consent-gated metadata enrichment: oEmbed -> OpenGraph fallback per item.
+
+    Every attempted source is recorded in `enrichment_attempts` (full audit
+    trail); a cached success/not_found for (item, source) is never
+    re-fetched. A token bucket rate-limits requests and a circuit breaker
+    (consecutive `blocked` classifications) stops making requests for the
+    rest of this batch once tripped. Consent is re-checked here even though
+    the API layer is the primary gate — if it's not given, this function
+    makes zero outbound requests.
+    """
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = len(item_ids)
+        session.commit()
+        try:
+            settings = session.get(AppSettings, 1)
+            if settings is None or not enrichment_policy.consent_given(settings):
+                raise PermissionError("enrichment is disabled or not consented to")
+
+            config = get_config()
+            fetcher = HttpEnrichmentFetcher(
+                timeout_seconds=config.enrichment_timeout_seconds,
+                user_agent=config.enrichment_user_agent,
+            )
+            bucket = enrichment_policy.TokenBucket(config.enrichment_requests_per_minute)
+            breaker = enrichment_policy.CircuitBreaker(config.enrichment_circuit_breaker_threshold)
+
+            for item_id in item_ids:
+                item = session.get(Item, item_id)
+                if item is not None:
+                    _enrich_one_item(session, item, fetcher, bucket, breaker)
+                job.progress += 1
+                session.commit()
+
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
             raise
