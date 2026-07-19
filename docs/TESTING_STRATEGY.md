@@ -23,6 +23,13 @@ ZIPs at test time (nothing export-like is committed):
   misses, exact + tracking-parameter duplicates, an external link, and
   mojibake strings whose exact expected decodings are exported as module
   constants for test assertions.
+- **Cluster export** (`build_cluster_export_zip`, emitted as `clusters.zip`;
+  M6) — one friend thread whose shares form two clearly-themed groups (high
+  token overlap within a theme, none across) plus a near-duplicate text pair
+  on distinct URLs. Deterministic clusters under both the mock and the real
+  local embedding provider; kept separate from the rich export so M4/M5
+  count assertions never shift. `clusters.spec.ts` uploads this one (each
+  spec file uploads its own ZIP — checksum dedupe would 409 a re-upload).
 - Mojibake/emoji strings (UTF-8-as-latin-1 escapes) with known expected
   decodings.
 - Multi-file paginated threads (`message_1.json`, `message_2.json`).
@@ -67,13 +74,24 @@ reproducing it before the fix is considered done.
 - Provider adapters (Anthropic/OpenAI) tested against faked HTTP (`respx`);
   **no live API keys in tests or CI, ever.** MockProvider covers all AI
   pipelines.
+- **Embeddings in tests are the deterministic mock provider**
+  (`EMBEDDING_PROVIDER=mock`: sha256-token vectors, shared vocabulary ⇒ high
+  cosine), so cluster memberships and near-duplicate groups are exactly
+  assertable and no model download ever happens in a test. The worker
+  analysis suite additionally wraps the whole embed → cluster → topics
+  pipeline in a respx guard asserting **zero HTTP requests**. Real fastembed
+  runs only in real use (and optionally in local e2e, where assertions stay
+  provider-agnostic).
 
 ### Frontend — Vitest + React Testing Library (`frontend/tests/`)
 Component behavior (reel-card states, filter bar, weight-slider re-rank math,
 keyboard review hook) and API-client contract tests against mocked responses.
 
 ### End-to-end — Playwright (`e2e/specs/`)
-Runs against the full compose stack with `AI_PROVIDER=mock`. Critical path:
+Runs against the full compose stack with `AI_PROVIDER=mock`; CI additionally
+sets `EMBEDDING_PROVIDER=mock` so the e2e job stays hermetic (locally the
+default `local` fastembed provider works too — the first analysis run just
+downloads the embedding model once). Critical path:
 login → upload synthetic ZIP → confirm self-DM → extract → inbox counts →
 cluster → bulk-describe cluster → keyboard-review a needs_context item →
 generate projects → adjust weights (observe re-rank) → combine two ideas →

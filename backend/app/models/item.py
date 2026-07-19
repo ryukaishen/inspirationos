@@ -1,6 +1,7 @@
 import enum
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
@@ -64,8 +65,9 @@ class Item(Base, CreatedAtMixin, UpdatedAtMixin):
     the uniqueness invariant is one item per (message, canonical URL).
     Source FKs are nullable because M9 raw-import deletion may null them while
     keeping the derived item. `share_text`/`adjacent_text`/`context_note` are
-    private content — never in logs, errors, or job payloads.
-    `embedding`/`embedding_model` columns arrive with M6.
+    private content — never in logs, errors, or job payloads. `embedding` is
+    derived from that private text and is deliberately absent from ItemRead —
+    it never leaves the backend.
     """
 
     __tablename__ = "items"
@@ -120,3 +122,5 @@ class Item(Base, CreatedAtMixin, UpdatedAtMixin):
         ARRAY(Text), nullable=False, default=list, server_default=text("'{}'::text[]")
     )
     duplicate_group_id: Mapped[int | None] = mapped_column(ForeignKey("duplicate_groups.id"))
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384))
+    embedding_model: Mapped[str | None] = mapped_column(String(128))

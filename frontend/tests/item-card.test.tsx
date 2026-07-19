@@ -65,7 +65,13 @@ describe("ItemCard", () => {
     mockedUpdate.mockReset();
     mockedEnrichItems.mockReset();
     mockedGetSettings.mockReset();
-    mockedGetSettings.mockResolvedValue({ enrichment_enabled: false, enrichment_consent_at: null });
+    mockedGetSettings.mockResolvedValue({
+      enrichment_enabled: false,
+      enrichment_consent_at: null,
+      ai_provider: "mock",
+      model_overrides: {},
+      monthly_budget_usd: null,
+    });
   });
 
   it("renders type, share text, status, and tags", () => {
@@ -106,6 +112,9 @@ describe("ItemCard", () => {
     mockedGetSettings.mockResolvedValue({
       enrichment_enabled: true,
       enrichment_consent_at: "2026-01-01T00:00:00Z",
+      ai_provider: "mock",
+      model_overrides: {},
+      monthly_budget_usd: null,
     });
     mockedEnrichItems.mockResolvedValue({ job_id: 42 });
     renderWithClient(

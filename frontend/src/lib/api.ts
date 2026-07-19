@@ -400,9 +400,23 @@ export async function enrichItems(payload: EnrichPayload): Promise<EnrichAccepte
 
 // --- settings --------------------------------------------------------------
 
+export type AiProvider = "anthropic" | "openai" | "mock";
+
+export const AI_PROVIDERS: readonly AiProvider[] = ["anthropic", "openai", "mock"];
+
 export interface SettingsRead {
   enrichment_enabled: boolean;
   enrichment_consent_at: string | null;
+  ai_provider: AiProvider;
+  // Per-tier model-name overrides for the active provider ("generation"/"fast").
+  model_overrides: Record<string, string>;
+  monthly_budget_usd: number | null;
+}
+
+export interface AiSettingsPatch {
+  ai_provider?: AiProvider;
+  model_overrides?: { generation?: string | null; fast?: string | null } | null;
+  monthly_budget_usd?: number | null;
 }
 
 export async function getSettings(): Promise<SettingsRead> {
@@ -426,4 +440,130 @@ export async function updateEnrichmentSettings(enrichmentEnabled: boolean): Prom
     );
   }
   return (await response.json()) as SettingsRead;
+}
+
+export async function updateAiSettings(patch: AiSettingsPatch): Promise<SettingsRead> {
+  const response = await fetch("/api/settings/ai", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `AI settings update failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as SettingsRead;
+}
+
+// --- analysis & clusters ----------------------------------------------------
+
+export type ClusterRunStatus = "running" | "succeeded" | "failed";
+
+export interface ClusterRead {
+  id: number;
+  run_id: number;
+  label: string | null;
+  description_md: string | null;
+  size: number;
+  topics: string[];
+}
+
+export interface ClusterRunRead {
+  id: number;
+  method: string;
+  params: Record<string, unknown>;
+  embedding_model: string;
+  status: ClusterRunStatus;
+  created_at: string;
+  cluster_count: number;
+}
+
+export interface ClusterRunDetail extends ClusterRunRead {
+  clusters: ClusterRead[];
+}
+
+export interface AnalysisAccepted {
+  job_id: number;
+}
+
+async function postAnalysis(path: string, body: unknown): Promise<AnalysisAccepted> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `analysis trigger failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as AnalysisAccepted;
+}
+
+export async function triggerEmbed(): Promise<AnalysisAccepted> {
+  return postAnalysis("/api/analysis/embed", {});
+}
+
+export async function triggerCluster(): Promise<AnalysisAccepted> {
+  return postAnalysis("/api/analysis/cluster", {});
+}
+
+export async function triggerTopics(): Promise<AnalysisAccepted> {
+  return postAnalysis("/api/analysis/topics", {});
+}
+
+export async function listClusterRuns(): Promise<ClusterRunRead[]> {
+  const response = await fetch("/api/cluster-runs", { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `cluster runs fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as ClusterRunRead[];
+}
+
+export async function getClusterRun(runId: number): Promise<ClusterRunDetail> {
+  const response = await fetch(`/api/cluster-runs/${runId}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `cluster run fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as ClusterRunDetail;
+}
+
+export async function getClusterItems(clusterId: number): Promise<{ items: ItemRead[] }> {
+  const response = await fetch(`/api/clusters/${clusterId}/items`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `cluster items fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as { items: ItemRead[] };
+}
+
+export interface ClusterPatch {
+  label?: string;
+  description_md?: string;
+}
+
+export async function updateCluster(clusterId: number, patch: ClusterPatch): Promise<ClusterRead> {
+  const response = await fetch(`/api/clusters/${clusterId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `cluster update failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as ClusterRead;
 }

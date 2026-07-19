@@ -231,6 +231,65 @@ def build_rich_export_zip(
     return path
 
 
+# --- clusterable export fixture (Milestone 6 analysis) -----------------------
+#
+# One friend thread with two clearly-themed groups of shares (high token
+# overlap within a theme, none across) plus a near-duplicate text pair with
+# distinct URLs. Deterministic clusters under both the mock and the real local
+# embedding provider; kept separate from the rich export so M4/M5 count
+# assertions stay untouched.
+
+CLUSTER_THREAD_DIR = "syntheticclusters_1122334455"
+CLUSTER_THREAD_PATH = f"inbox/{CLUSTER_THREAD_DIR}"
+
+CLUSTER_SOURDOUGH_SHARES = [
+    ("https://www.instagram.com/reel/CLUSTAAA001/", "Sourdough bread baking starter guide"),
+    ("https://www.instagram.com/reel/CLUSTAAA002/", "Sourdough bread baking starter tips"),
+    ("https://www.instagram.com/reel/CLUSTAAA003/", "Sourdough bread baking starter schedule"),
+]
+CLUSTER_CLIMBING_SHARES = [
+    ("https://www.instagram.com/reel/CLUSTBBB001/", "Climbing bouldering grip strength drills"),
+    ("https://www.instagram.com/reel/CLUSTBBB002/", "Climbing bouldering grip strength training"),
+    ("https://www.instagram.com/reel/CLUSTBBB003/", "Climbing bouldering grip strength practice"),
+]
+# Identical text on two different URLs: no exact duplicate, but a near_text
+# duplicate group once embeddings exist.
+CLUSTER_NEAR_DUP_TEXT = "Perfect espresso tamping pressure demo"
+CLUSTER_NEAR_DUP_SHARES = [
+    ("https://www.instagram.com/reel/CLUSTCCC001/", CLUSTER_NEAR_DUP_TEXT),
+    ("https://www.instagram.com/reel/CLUSTCCC002/", CLUSTER_NEAR_DUP_TEXT),
+]
+
+CLUSTER_ITEM_COUNT = 8
+CLUSTER_MESSAGE_COUNT = 9  # 8 shares + 1 run marker
+
+
+def build_cluster_export_zip(path: Path, unique: str = "") -> Path:
+    """Current-layout export whose items form deterministic semantic clusters."""
+    shares = [*CLUSTER_SOURDOUGH_SHARES, *CLUSTER_CLIMBING_SHARES, *CLUSTER_NEAR_DUP_SHARES]
+    messages = [
+        _rich_message(FRIEND_NAME, index * 300, share={"link": link, "share_text": text})
+        for index, (link, text) in enumerate(shares)
+    ]
+    # Far outside every adjacent-text window, so item texts stay exactly the
+    # share texts; carries the per-run marker for distinct checksums.
+    messages.append(
+        _rich_message(OWNER_NAME, 100_000, content=f"Synthetic run marker {unique}".strip())
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/inbox/{CLUSTER_THREAD_DIR}/message_1.json",
+            _rich_page(
+                "Synthetic Clusters",
+                [OWNER_NAME, FRIEND_NAME],
+                CLUSTER_THREAD_DIR,
+                list(reversed(messages)),
+            ),
+        )
+        zf.writestr("personal_information/personal_information.json", _personal_information_json())
+    return path
+
+
 def build_html_export_zip(path: Path) -> Path:
     """HTML-format export — must be rejected with the "re-request as JSON" message."""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -320,6 +379,7 @@ def main(argv: list[str] | None = None) -> None:
     build_variant_b_zip(out / "variant_b.zip", unique=args.unique)
     build_rich_export_zip(out / "rich_a.zip", variant="a", unique=args.unique)
     build_rich_export_zip(out / "rich_b.zip", variant="b", unique=args.unique)
+    build_cluster_export_zip(out / "clusters.zip", unique=args.unique)
     build_html_export_zip(out / "html_export.zip")
     build_zip_slip_zip(out / "zip_slip.zip")
     build_ratio_bomb_zip(out / "zip_bomb_ratio.zip")

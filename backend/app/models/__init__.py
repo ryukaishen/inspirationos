@@ -1,3 +1,12 @@
+from app.models.ai_request import AiRequest, AiRequestStatus
+from app.models.analysis import (
+    Cluster,
+    ClusterRun,
+    ClusterRunStatus,
+    ItemCluster,
+    ItemTopic,
+    Topic,
+)
 from app.models.app_settings import AiProvider, AppSettings
 from app.models.base import Base
 from app.models.conversation import Conversation
@@ -10,8 +19,13 @@ from app.models.user import User
 
 __all__ = [
     "AiProvider",
+    "AiRequest",
+    "AiRequestStatus",
     "AppSettings",
     "Base",
+    "Cluster",
+    "ClusterRun",
+    "ClusterRunStatus",
     "Conversation",
     "DuplicateGroup",
     "DuplicateReason",
@@ -22,11 +36,14 @@ __all__ = [
     "Import",
     "ImportStatus",
     "Item",
+    "ItemCluster",
     "ItemStatus",
+    "ItemTopic",
     "ItemType",
     "Job",
     "JobKind",
     "JobStatus",
     "Message",
+    "Topic",
     "User",
 ]

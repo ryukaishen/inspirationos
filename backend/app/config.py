@@ -42,6 +42,38 @@ class AppConfig(BaseSettings):
     enrichment_circuit_breaker_threshold: int = 5
     enrichment_user_agent: str = "InspirationOS/1.0 (personal project; anonymous metadata fetch)"
 
+    # AI providers (M6). Env value is the fallback; the effective provider is
+    # settings.ai_provider in the DB (seeded `mock`), switched via the UI —
+    # see services/ai/factory.py. API keys are env-only, never stored in the DB.
+    ai_provider: str = "mock"
+    anthropic_api_key: str | None = None
+    anthropic_generation_model: str = "claude-sonnet-5"
+    anthropic_fast_model: str = "claude-haiku-4-5"
+    openai_api_key: str | None = None
+    openai_generation_model: str = "gpt-5.2"
+    openai_fast_model: str = "gpt-5-mini"
+    # Monthly USD ceiling (env fallback; settings.monthly_budget_usd overrides)
+    # and a per-job cumulative token cap — both checked before every LLM call.
+    ai_monthly_budget_usd: float = 10.0
+    ai_job_token_budget: int = 250_000
+    ai_max_output_tokens: int = 4096
+
+    # Embeddings & analysis (M6). `local` is fastembed (no key, offline after a
+    # one-time model download); `mock` is the deterministic test/CI provider;
+    # `openai` requires OPENAI_API_KEY. The vector column is fixed at 384 dims,
+    # so the OpenAI adapter requests dimensions=384.
+    embedding_provider: str = "local"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    openai_embedding_model: str = "text-embedding-3-small"
+    # Agglomerative clustering cosine-distance cut; pairs closer than
+    # (1 - near_duplicate_similarity_threshold) become near_text duplicate groups.
+    cluster_distance_threshold: float = 0.4
+    near_duplicate_similarity_threshold: float = 0.95
+    # Per-item text truncation and per-cluster item cap for LLM topic/label
+    # context — cost control, never a correctness knob.
+    topics_max_chars_per_item: int = 500
+    topics_max_items_per_cluster: int = 30
+
 
 @lru_cache
 def get_config() -> AppConfig:

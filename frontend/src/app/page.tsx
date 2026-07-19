@@ -21,6 +21,10 @@ export default function Home() {
             Fast review
           </Link>
           {" · "}
+          <Link className="underline" href="/clusters">
+            Clusters
+          </Link>
+          {" · "}
           <Link className="underline" href="/settings">
             Settings
           </Link>

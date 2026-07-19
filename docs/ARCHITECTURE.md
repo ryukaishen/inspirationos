@@ -325,33 +325,89 @@ never needs to insert a newline), `s` skips, `1`–`5` set a status directly
 `Enter`/`Escape` are intercepted — every other key types normally, so
 shortcuts never hijack note text.
 
-## AI generation & structured output
+## AI analysis pipeline (M6)
 
-- `LLMProvider.generate_structured(task, context, schema, budget) -> BaseModel`
-  with three implementations: **Anthropic** (tool-use forced schema; default
-  `claude-sonnet-5` generation, `claude-haiku-4-5` fast tasks), **OpenAI**
-  (JSON-schema structured outputs), **Mock** (deterministic fixtures keyed by
-  task + input hash; dev/CI default).
-- Provider selection is configuration-only (env default, Settings override).
-  All tasks are provider-agnostic and validate against the same Pydantic
-  schemas.
-- **Validation loop:** parse → on failure, one repair retry with validation
-  errors appended → second failure fails the job. Malformed output is never
-  silently accepted.
+Three jobs on the `ai` queue, each following the standard job conventions and
+triggered via `app/api/clusters.py` (`POST /api/analysis/embed|cluster|topics`,
+job-row-then-enqueue, payloads carry IDs/scalars only). The frontend
+`/clusters` page chains them (`lib/analysis-pipeline.ts`, polling
+`/api/jobs/{id}`); each is also individually re-runnable and idempotent.
+
+- **`run_embed_batch`** (`services/analysis/embeddings.py`): embeds each
+  item's real text (`share_text` + `adjacent_text` + `enriched_caption` +
+  `context_note`) into `items.embedding vector(384)`. Items with no text are
+  never embedded — the anti-hallucination invariant starts here. Default
+  scope = items missing an embedding for the active model; `force` re-embeds
+  (e.g. after notes changed). `EmbeddingProvider` implementations: **local**
+  fastembed (`BAAI/bge-small-en-v1.5`, lazy one-time ONNX model download — an
+  infra fetch, no user data), **openai** (`dimensions=384` to fit the fixed
+  column), **mock** (deterministic sha256-token vectors; tests/CI — shared
+  vocabulary ⇒ high cosine, so memberships are exactly assertable).
+- **`run_cluster`** (`services/analysis/clustering.py` + `dedupe.py`): fully
+  local and deterministic (no LLM, no network) so it is runnable **before**
+  review. Creates a new versioned `cluster_runs` row per execution
+  (scikit-learn `AgglomerativeClustering`, cosine distance threshold
+  `CLUSTER_DISTANCE_THRESHOLD`, average linkage); clusters below
+  `min_cluster_size=2` are dropped (singletons stay unclustered; recorded in
+  `params`). The same job then rebuilds **`near_text` duplicate groups** from
+  scratch: cosine similarity ≥ `NEAR_DUPLICATE_SIMILARITY_THRESHOLD` among
+  items not already in an exact group → connected components → groups with
+  canonical = earliest share. Exact groups are never touched. At single-user
+  scale similarity is computed in-process over the full matrix; pgvector is
+  durable storage plus future ANN search, not a query dependency.
+- **`run_topics`** (`services/analysis/topics.py`): per cluster (own
+  transaction, visible progress), the fast-model tier runs `ClusterLabel`
+  then `TopicExtraction` over member texts filtered by
+  `is_eligible_for_generation` and truncated (`TOPICS_MAX_*` caps). Labels/
+  descriptions are written **only when still NULL**, so user edits survive
+  re-runs. Echoed item_ids are verified server-side (`GroundingError` on
+  unknown ids); topics upsert by slug; `item_topics` delete-and-reinsert per
+  item. A budget abort mid-batch keeps completed clusters.
+
+## AI providers & structured output (M6 plumbing)
+
+- `LLMProvider` (`services/ai/provider.py`): `generate_raw(task, instructions,
+  context, schema, model) -> RawGeneration` (JSON text + token usage +
+  latency). Implementations: **Anthropic** (`anthropic_provider.py`, official
+  SDK, one forced tool call whose `input_schema` is the task's Pydantic JSON
+  schema; defaults `claude-sonnet-5` generation / `claude-haiku-4-5` fast),
+  **OpenAI** (`openai_provider.py`, `json_schema` response_format; `gpt-5.2` /
+  `gpt-5-mini`), **Mock** (`mock_provider.py`, deterministic token-frequency
+  outputs, always schema-valid, zero cost/IO; dev/CI default). Both real SDKs
+  are httpx-based, so respx contract tests exercise them with no live keys.
+- **Selection is configuration-only** (`factory.py`): effective provider =
+  `settings.ai_provider` (DB singleton, seeded `mock`, switched via the
+  Settings UI); env `AI_PROVIDER` is only the fallback when the row is
+  missing. Models resolve as `settings.model_overrides`
+  (`{"generation"|"fast": name}`) → provider env defaults. API keys are
+  env-only — never in the DB, API payloads, or logs; a real provider without
+  its key fails with `ProviderNotConfiguredError`.
+- **Validation loop** (`structured.py::generate_validated`): budget check →
+  provider call → JSON parse + schema validation; on failure ONE repair retry
+  with the validation errors appended (sent only back to the same provider,
+  never logged/stored); second failure raises `StructuredOutputError` → the
+  job fails with the class name only. Every call — success, invalid output,
+  or provider error — writes an `ai_requests` row (committed immediately so
+  the audit survives job-failure rollbacks): provider/model/task/tokens/
+  est-cost/latency/status, never content.
+- **Cost controls** (`budget.py`): monthly spend = SUM(`est_cost_usd`) over
+  the current UTC calendar month, cap = `settings.monthly_budget_usd` else
+  `AI_MONTHLY_BUDGET_USD`; plus a per-job cumulative token budget
+  (`AI_JOB_TOKEN_BUDGET`). Both checked before **each** call, so a batch
+  aborts cleanly mid-way with completed work retained. The pricing table is
+  a per-MTok estimate (mock = $0; unknown models assume Opus-tier rates).
 - **Prompt templates** are versioned files in `services/ai/prompts/`
-  (instructions only — never user data); generated rows record
-  `prompt_version`, provider, model.
-- Task schemas: `TopicExtraction`, `ClusterLabel`, `ProjectIdeas` (sub-scores
-  each with a one-line rationale), `CombinedProject`, `AdvisorReview`
-  (commonality verdict, comparative strength, recruiter impact, prerequisites,
-  week-by-week plan), `ReadmePlan`, `ResumeBullets`, `PortfolioDescription`,
-  `InterviewAnswer`, `TechQuestions`.
-- **Grounding:** ideas must cite source item/cluster IDs (echoed and verified
-  server-side); only items with real text may enter generation context
-  (enforced in code); a post-generation regex flags suspicious performance
-  claims in artifacts.
-- **Cost controls:** per-job token budget + monthly USD cap checked before
-  each call; usage logged to `ai_requests` (tokens/cost/latency only — no
-  content).
-- Scoring is hybrid: LLM sub-scores with rationales; final score computed at
-  read time as `Σ(weight_i × subscore_i)` from user weights — instant re-rank.
+  (`<task>_v1.txt`, instructions only — never user data).
+- M6 task schemas (`services/ai/schemas.py`): `TopicExtraction` (per-item
+  assignments with confidences), `ClusterLabel`. M7/M8 add `ProjectIdeas`
+  (sub-scores each with a one-line rationale), `CombinedProject`,
+  `AdvisorReview` (commonality verdict, comparative strength, recruiter
+  impact, prerequisites, week-by-week plan), `ReadmePlan`, `ResumeBullets`,
+  `PortfolioDescription`, `InterviewAnswer`, `TechQuestions`.
+- **Grounding:** generated output must cite source item/cluster IDs (echoed
+  and verified server-side — implemented for topics in M6); only items with
+  real text may enter generation context (enforced in code); M8 adds a
+  post-generation regex flagging suspicious performance claims in artifacts.
+- Scoring (M7) is hybrid: LLM sub-scores with rationales; final score computed
+  at read time as `Σ(weight_i × subscore_i)` from user weights — instant
+  re-rank.

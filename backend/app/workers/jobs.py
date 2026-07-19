@@ -10,11 +10,13 @@ import time
 import zipfile
 from datetime import UTC, datetime
 
+import numpy as np
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_config
 from app.db import get_sessionmaker
+from app.models.analysis import Cluster, ClusterRun, ClusterRunStatus, ItemCluster, ItemTopic
 from app.models.app_settings import AppSettings
 from app.models.conversation import Conversation
 from app.models.enrichment_attempt import EnrichmentAttempt, EnrichmentSource, EnrichmentStatus
@@ -22,6 +24,29 @@ from app.models.import_ import Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item
 from app.models.job import Job, JobStatus
 from app.models.message import Message
+from app.services.ai.budget import JobTokenTracker
+from app.services.ai.factory import get_llm_provider
+from app.services.ai.provider import ModelTier
+from app.services.ai.schemas import (
+    TASK_CLUSTER_LABEL,
+    TASK_TOPIC_EXTRACTION,
+    ClusterLabel,
+    TopicExtraction,
+)
+from app.services.ai.structured import generate_validated
+from app.services.analysis.clustering import (
+    CLUSTER_METHOD,
+    LINKAGE,
+    MIN_CLUSTER_SIZE,
+    cluster_embeddings,
+)
+from app.services.analysis.dedupe import near_duplicate_components
+from app.services.analysis.embeddings import embedding_text_for, get_embedding_provider
+from app.services.analysis.topics import (
+    build_llm_context_items,
+    get_or_create_topic,
+    verify_echoed_item_ids,
+)
 from app.services.enrichment import policy as enrichment_policy
 from app.services.enrichment.fetcher import EnrichmentFetcher, HttpEnrichmentFetcher
 from app.services.ingest.format_detection import count_message_json_files
@@ -422,6 +447,323 @@ def run_enrich_batch(job_id: int, item_ids: list[int]) -> None:
                 item = session.get(Item, item_id)
                 if item is not None:
                     _enrich_one_item(session, item, fetcher, bucket, breaker)
+                job.progress += 1
+                session.commit()
+
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+EMBED_CHUNK_SIZE = 64
+
+
+def run_embed_batch(job_id: int, item_ids: list[int] | None = None, force: bool = False) -> None:
+    """Embed item texts into pgvector via the configured EmbeddingProvider.
+
+    Default scope is every item missing an embedding for the active model
+    (idempotent — re-running skips already-embedded items); `force` re-embeds,
+    e.g. after context notes changed. Items with no real text at all are never
+    embedded, so they can never enter semantic analysis.
+    """
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        session.commit()
+        try:
+            provider = get_embedding_provider(get_config())
+            stmt = select(Item).order_by(Item.id)
+            if item_ids:
+                stmt = stmt.where(Item.id.in_(item_ids))
+            candidates: list[tuple[Item, str]] = []
+            for item in session.scalars(stmt):
+                text = embedding_text_for(item)
+                if text is None:
+                    continue
+                if not force and (
+                    item.embedding is not None and item.embedding_model == provider.model_name
+                ):
+                    continue
+                candidates.append((item, text))
+            job.total = len(candidates)
+            session.commit()
+
+            for start in range(0, len(candidates), EMBED_CHUNK_SIZE):
+                chunk = candidates[start : start + EMBED_CHUNK_SIZE]
+                vectors = provider.embed([text for _, text in chunk])
+                for (item, _), vector in zip(chunk, vectors, strict=True):
+                    item.embedding = vector
+                    item.embedding_model = provider.model_name
+                job.progress += len(chunk)
+                session.commit()
+
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_cluster(job_id: int, distance_threshold: float | None = None) -> None:
+    """Versioned agglomerative clustering + near-text duplicate rebuild.
+
+    Fully local and deterministic — no LLM, no network — so it is runnable
+    before review. Every execution creates a new `cluster_runs` row over the
+    items embedded with the active model; singletons stay unclustered.
+    Afterwards `near_text` duplicate groups are rebuilt from scratch from
+    cosine similarity (exact shortcode/URL groups are never touched).
+    """
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 3  # cluster, dedupe, finalize — coarse but visible
+        session.commit()
+        run: ClusterRun | None = None
+        try:
+            config = get_config()
+            model_name = get_embedding_provider(config).model_name
+            threshold = (
+                distance_threshold
+                if distance_threshold is not None
+                else config.cluster_distance_threshold
+            )
+            run = ClusterRun(
+                method=CLUSTER_METHOD,
+                params={
+                    "distance_threshold": threshold,
+                    "linkage": LINKAGE,
+                    "metric": "cosine",
+                    "min_cluster_size": MIN_CLUSTER_SIZE,
+                    "near_duplicate_similarity_threshold": (
+                        config.near_duplicate_similarity_threshold
+                    ),
+                },
+                embedding_model=model_name,
+                status=ClusterRunStatus.running,
+            )
+            session.add(run)
+            session.commit()
+
+            items = list(
+                session.scalars(
+                    select(Item)
+                    .where(Item.embedding.is_not(None), Item.embedding_model == model_name)
+                    .order_by(Item.id)
+                )
+            )
+            if len(items) >= 2:
+                matrix = np.stack([np.asarray(item.embedding, dtype=np.float64) for item in items])
+                groups = cluster_embeddings(matrix, distance_threshold=threshold)
+            else:
+                matrix = None
+                groups = []
+            for member_indices in groups:
+                cluster = Cluster(run_id=run.id, size=len(member_indices))
+                session.add(cluster)
+                session.flush()
+                session.add_all(
+                    ItemCluster(item_id=items[index].id, cluster_id=cluster.id)
+                    for index in member_indices
+                )
+            job.progress = 1
+            session.commit()
+
+            # Rebuild near_text duplicate groups from scratch; exact groups
+            # keep their members, which therefore never enter near-dedupe.
+            cleared_group_ids = set(
+                session.scalars(
+                    select(DuplicateGroup.id).where(
+                        DuplicateGroup.reason == DuplicateReason.near_text
+                    )
+                )
+            )
+            if cleared_group_ids:
+                session.execute(
+                    update(Item)
+                    .where(Item.duplicate_group_id.in_(cleared_group_ids))
+                    .values(duplicate_group_id=None)
+                    .execution_options(synchronize_session=False)
+                )
+                session.execute(
+                    delete(DuplicateGroup).where(DuplicateGroup.id.in_(cleared_group_ids))
+                )
+            eligible = [
+                item
+                for item in items
+                if item.duplicate_group_id is None or item.duplicate_group_id in cleared_group_ids
+            ]
+            if matrix is not None and len(eligible) >= 2:
+                eligible_matrix = np.stack(
+                    [np.asarray(item.embedding, dtype=np.float64) for item in eligible]
+                )
+                components = near_duplicate_components(
+                    eligible_matrix,
+                    similarity_threshold=config.near_duplicate_similarity_threshold,
+                )
+                for component in components:
+                    members = [eligible[index] for index in component]
+                    canonical = min(members, key=lambda i: (i.shared_at or _utcnow(), i.id))
+                    group = DuplicateGroup(
+                        canonical_item_id=canonical.id, reason=DuplicateReason.near_text
+                    )
+                    session.add(group)
+                    session.flush()
+                    for member in members:
+                        member.duplicate_group_id = group.id
+            job.progress = 2
+            session.commit()
+
+            run.status = ClusterRunStatus.succeeded
+            job.progress = 3
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            if run is not None and run.id is not None:
+                run.status = ClusterRunStatus.failed
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_topics(job_id: int, cluster_run_id: int | None = None) -> None:
+    """Fast-model topic extraction + cluster labeling over one cluster run.
+
+    Per cluster (own transaction, visible progress): only items passing the
+    anti-hallucination gate contribute text; echoed item_ids are verified
+    server-side; labels/descriptions are written only when still NULL so user
+    edits survive re-runs. A budget abort mid-batch keeps completed clusters.
+    """
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        session.commit()
+        try:
+            config = get_config()
+            if cluster_run_id is not None:
+                run = session.get(ClusterRun, cluster_run_id)
+            else:
+                run = session.scalar(
+                    select(ClusterRun)
+                    .where(ClusterRun.status == ClusterRunStatus.succeeded)
+                    .order_by(ClusterRun.id.desc())
+                    .limit(1)
+                )
+            if run is None:
+                raise ValueError("no succeeded cluster run available for topic extraction")
+
+            settings = session.get(AppSettings, 1)
+            provider = get_llm_provider(settings, config)
+            model = provider.resolve_model(ModelTier.fast)
+            tracker = JobTokenTracker(config.ai_job_token_budget)
+
+            clusters = list(
+                session.scalars(
+                    select(Cluster).where(Cluster.run_id == run.id).order_by(Cluster.id)
+                )
+            )
+            job.total = len(clusters)
+            session.commit()
+
+            for cluster in clusters:
+                members = list(
+                    session.scalars(
+                        select(Item)
+                        .join(ItemCluster, ItemCluster.item_id == Item.id)
+                        .where(ItemCluster.cluster_id == cluster.id)
+                        .order_by(Item.id)
+                    )
+                )
+                context_items = build_llm_context_items(
+                    members,
+                    max_chars_per_item=config.topics_max_chars_per_item,
+                    max_items=config.topics_max_items_per_cluster,
+                )
+                if context_items:
+                    if cluster.label is None or cluster.description_md is None:
+                        label_result = generate_validated(
+                            session,
+                            provider,
+                            task=TASK_CLUSTER_LABEL,
+                            context={"items": context_items},
+                            schema=ClusterLabel,
+                            model=model,
+                            config=config,
+                            job_id=job.id,
+                            token_tracker=tracker,
+                        )
+                        if cluster.label is None:
+                            cluster.label = label_result.label[:256]
+                        if cluster.description_md is None:
+                            cluster.description_md = label_result.description_md
+
+                    topics_result = generate_validated(
+                        session,
+                        provider,
+                        task=TASK_TOPIC_EXTRACTION,
+                        context={"items": context_items},
+                        schema=TopicExtraction,
+                        model=model,
+                        config=config,
+                        job_id=job.id,
+                        token_tracker=tracker,
+                    )
+                    allowed_ids = {entry["item_id"] for entry in context_items}
+                    verify_echoed_item_ids(
+                        [assignment.item_id for assignment in topics_result.assignments],
+                        allowed_ids,
+                    )
+                    echoed_ids = [a.item_id for a in topics_result.assignments]
+                    session.execute(delete(ItemTopic).where(ItemTopic.item_id.in_(echoed_ids)))
+                    for assignment in topics_result.assignments:
+                        confidence_by_topic: dict[int, float] = {}
+                        for entry in assignment.topics:
+                            topic = get_or_create_topic(session, entry.name)
+                            existing_confidence = confidence_by_topic.get(topic.id, 0.0)
+                            confidence_by_topic[topic.id] = max(
+                                existing_confidence, entry.confidence
+                            )
+                        session.add_all(
+                            ItemTopic(
+                                item_id=assignment.item_id,
+                                topic_id=topic_id,
+                                confidence=confidence,
+                            )
+                            for topic_id, confidence in confidence_by_topic.items()
+                        )
                 job.progress += 1
                 session.commit()
 

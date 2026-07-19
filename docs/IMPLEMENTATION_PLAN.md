@@ -186,22 +186,23 @@ cd e2e && npx playwright test specs/review.spec.ts
 that work offline via the mock provider.
 
 Scope:
-- [ ] `LLMProvider` interface + Anthropic, OpenAI, Mock implementations; config-only switching; Anthropic default for real use, Mock default in dev/CI.
-- [ ] Structured-output validation with one repair retry; hard failure fails the job.
-- [ ] Embeddings: fastembed → pgvector, `embed_batch` job, `EmbeddingProvider` interface.
-- [ ] Clustering job (agglomerative, cosine threshold), versioned `cluster_runs`; runnable **before** review.
-- [ ] Topic extraction (fast-model task); cluster labeling; editable cluster descriptions.
-- [ ] Near-duplicate text detection via cosine threshold → `duplicate_groups` (`near_text`).
-- [ ] Budget enforcement (`budget.py`) + `ai_requests` logging (no content).
-- [ ] Settings UI: provider, model overrides, monthly budget.
+- [x] `LLMProvider` interface + Anthropic, OpenAI, Mock implementations; config-only switching; Anthropic default for real use, Mock default in dev/CI.
+- [x] Structured-output validation with one repair retry; hard failure fails the job.
+- [x] Embeddings: fastembed → pgvector, `embed_batch` job, `EmbeddingProvider` interface.
+- [x] Clustering job (agglomerative, cosine threshold), versioned `cluster_runs`; runnable **before** review.
+- [x] Topic extraction (fast-model task); cluster labeling; editable cluster descriptions.
+- [x] Near-duplicate text detection via cosine threshold → `duplicate_groups` (`near_text`).
+- [x] Budget enforcement (`budget.py`) + `ai_requests` logging (no content).
+- [x] Settings UI: provider, model overrides, monthly budget.
 
-Acceptance criteria:
-- [ ] Full pipeline (embed → cluster → topics → labels) runs offline with MockProvider.
-- [ ] Deterministic fixture clusters as expected (assertable memberships).
-- [ ] Malformed-output test passes only via the repair path; double failure surfaces as a failed job with redacted error.
-- [ ] `ai_requests` rows contain counts/cost but never text (asserted).
-- [ ] Budget cap aborts a batch mid-way cleanly.
-- [ ] Both real adapters pass respx contract tests (no live keys).
+Acceptance criteria (verified locally against the compose stack 2026-07-19;
+CI run still required — no commit has been made yet):
+- [x] Full pipeline (embed → cluster → topics → labels) runs offline with MockProvider (worker test wraps it in a zero-HTTP respx guard; e2e drives it through the UI).
+- [x] Deterministic fixture clusters as expected (assertable memberships).
+- [x] Malformed-output test passes only via the repair path; double failure surfaces as a failed job with redacted error.
+- [x] `ai_requests` rows contain counts/cost but never text (asserted; the table has no content columns at all).
+- [x] Budget cap aborts a batch mid-way cleanly.
+- [x] Both real adapters pass respx contract tests (no live keys).
 
 Test commands:
 ```bash

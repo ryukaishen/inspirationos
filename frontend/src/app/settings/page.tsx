@@ -11,20 +11,57 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { getSettings, updateEnrichmentSettings } from "@/lib/api";
+import {
+  AI_PROVIDERS,
+  getSettings,
+  updateAiSettings,
+  updateEnrichmentSettings,
+  type AiProvider,
+} from "@/lib/api";
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [aiProvider, setAiProvider] = useState<AiProvider>("mock");
+  const [generationModel, setGenerationModel] = useState("");
+  const [fastModel, setFastModel] = useState("");
+  const [budget, setBudget] = useState("");
+  const [aiFormReady, setAiFormReady] = useState(false);
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: getSettings,
   });
 
+  // Initialize the AI form once from the loaded settings (render-time state
+  // adjustment); afterwards the drafts are user-owned until saved.
+  if (settings && !aiFormReady) {
+    setAiProvider(settings.ai_provider);
+    setGenerationModel(settings.model_overrides.generation ?? "");
+    setFastModel(settings.model_overrides.fast ?? "");
+    setBudget(settings.monthly_budget_usd === null ? "" : String(settings.monthly_budget_usd));
+    setAiFormReady(true);
+  }
+
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => updateEnrichmentSettings(enabled),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const saveAi = useMutation({
+    mutationFn: () =>
+      updateAiSettings({
+        ai_provider: aiProvider,
+        model_overrides: {
+          generation: generationModel.trim() || null,
+          fast: fastModel.trim() || null,
+        },
+        monthly_budget_usd: budget.trim() === "" ? null : Number(budget),
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
     },
@@ -78,6 +115,88 @@ export default function SettingsPage() {
               Consent given {new Date(settings.enrichment_consent_at).toLocaleString()}
             </p>
           )}
+        </div>
+      )}
+
+      {settings && (
+        <div className="space-y-3 rounded-lg border bg-card p-4">
+          <div>
+            <p className="font-medium">AI provider</p>
+            <p className="text-sm text-muted-foreground">
+              The mock provider works fully offline and is the default. API keys are read
+              from environment variables only — they are never stored here.
+            </p>
+          </div>
+          <label className="block text-sm">
+            Provider
+            <select
+              aria-label="AI provider"
+              data-testid="ai-provider-select"
+              className="mt-1 block w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+              value={aiProvider}
+              onChange={(event) => setAiProvider(event.target.value as AiProvider)}
+            >
+              {AI_PROVIDERS.map((provider) => (
+                <option key={provider} value={provider}>
+                  {provider}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm">
+              Generation model override
+              <Input
+                data-testid="ai-model-generation"
+                className="mt-1"
+                value={generationModel}
+                onChange={(event) => setGenerationModel(event.target.value)}
+                placeholder="provider default"
+              />
+            </label>
+            <label className="block text-sm">
+              Fast model override
+              <Input
+                data-testid="ai-model-fast"
+                className="mt-1"
+                value={fastModel}
+                onChange={(event) => setFastModel(event.target.value)}
+                placeholder="provider default"
+              />
+            </label>
+          </div>
+          <label className="block text-sm">
+            Monthly budget (USD)
+            <Input
+              data-testid="ai-budget-input"
+              className="mt-1 max-w-40"
+              type="number"
+              min="0"
+              step="0.5"
+              value={budget}
+              onChange={(event) => setBudget(event.target.value)}
+              placeholder="env default"
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <Button
+              data-testid="ai-save"
+              disabled={saveAi.isPending}
+              onClick={() => saveAi.mutate()}
+            >
+              Save AI settings
+            </Button>
+            {saveAi.isSuccess && (
+              <p className="text-xs text-muted-foreground" data-testid="ai-saved">
+                Saved.
+              </p>
+            )}
+            {saveAi.isError && (
+              <p className="text-xs text-destructive" data-testid="ai-save-error">
+                Saving failed — check the values.
+              </p>
+            )}
+          </div>
         </div>
       )}
 

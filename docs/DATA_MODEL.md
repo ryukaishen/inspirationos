@@ -25,19 +25,24 @@ and `ai_requests` never contain message content — IDs and counts only.**
 
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
-| `items` | id, source (default `instagram`), import_id, conversation_id, message_id (source FKs nullable — M9 raw-import deletion may null them), url_raw, url_canonical, shortcode, item_type (`reel\|post\|tv\|story\|external\|unknown`), shared_at, share_text, adjacent_text, enriched_title, enriched_caption, enriched_author, enriched_source (`oembed\|og`, nullable), context_note, status (`new\|needs_context\|reviewed\|archived\|ignored`), tags (text[]), duplicate_group_id FK, embedding vector(384), embedding_model, timestamps | Core entity; one row per link occurrence (repeat shares stay separate rows — the "shared again" signal). Partial **non-unique** index on shortcode (`WHERE shortcode IS NOT NULL`) for dedupe lookups; the uniqueness invariant is the partial unique index on (message_id, url_canonical). `enriched_*` kept separate from export-derived text and labeled by origin in the UI — `enriched_source` (M5) records which source last wrote them, so the UI can label "via oEmbed"/"via OpenGraph" without joining `enrichment_attempts`. `status` defaults to `needs_context` at extract time when an item carries no `share_text`/`adjacent_text` at all (`services/enrichment/policy.py::initial_status_for`), `new` otherwise. `embedding`/`embedding_model` columns are added by M6's migration (they need the pgvector Python dependency). M4 adds `ix_items_fts`, a GIN index over `to_tsvector('english', coalesce(share_text,'') || ' ' || coalesce(adjacent_text,'') || ' ' || coalesce(context_note,''))` (`concat()` is not IMMUTABLE-eligible for a Postgres expression index), backing `GET /api/items?search=`. |
+| `items` | id, source (default `instagram`), import_id, conversation_id, message_id (source FKs nullable — M9 raw-import deletion may null them), url_raw, url_canonical, shortcode, item_type (`reel\|post\|tv\|story\|external\|unknown`), shared_at, share_text, adjacent_text, enriched_title, enriched_caption, enriched_author, enriched_source (`oembed\|og`, nullable), context_note, status (`new\|needs_context\|reviewed\|archived\|ignored`), tags (text[]), duplicate_group_id FK, embedding vector(384), embedding_model, timestamps | Core entity; one row per link occurrence (repeat shares stay separate rows — the "shared again" signal). Partial **non-unique** index on shortcode (`WHERE shortcode IS NOT NULL`) for dedupe lookups; the uniqueness invariant is the partial unique index on (message_id, url_canonical). `enriched_*` kept separate from export-derived text and labeled by origin in the UI — `enriched_source` (M5) records which source last wrote them, so the UI can label "via oEmbed"/"via OpenGraph" without joining `enrichment_attempts`. `status` defaults to `needs_context` at extract time when an item carries no `share_text`/`adjacent_text` at all (`services/enrichment/policy.py::initial_status_for`), `new` otherwise. `embedding vector(384)`/`embedding_model` (migration `0006`) hold the M6 semantic embedding of the item's combined real text; both stay NULL for textless items, and the embedding is **never serialized into any API response** (it is derived from private text). No ANN index at single-user scale — analysis reads the full matrix in-process. M4 adds `ix_items_fts`, a GIN index over `to_tsvector('english', coalesce(share_text,'') || ' ' || coalesce(adjacent_text,'') || ' ' || coalesce(context_note,''))` (`concat()` is not IMMUTABLE-eligible for a Postgres expression index), backing `GET /api/items?search=`. |
 | `duplicate_groups` | id, canonical_item_id FK, reason (`same_shortcode\|same_canonical_url\|near_text`), created_at | Exact groups rebuilt from scratch by every extract run (canonical item = earliest share); `near_text` groups from M6 embedding similarity. |
 | `enrichment_attempts` | id, item_id FK, source (`oembed\|og`), status (`success\|blocked\|not_found\|error\|disabled`), http_status, fetched_title, fetched_caption, fetched_author, error, attempted_at | Full audit (M5, migration `0005`); every attempted source is a row, never overwritten. Cache: a source with an existing `success`/`not_found` row for an item is never re-fetched; an item that already has `enriched_source` set (succeeded via an earlier source on a prior run) is skipped entirely. Partial index on `(item_id, source) WHERE status IN ('success','not_found')` backs the cache lookup. |
 
 ## Analysis
 
+All added by migration `0006` (M6), purely additive. Membership FKs
+(`item_topics.item_id`, `item_clusters.item_id`) are `ON DELETE CASCADE` so
+the extract pass's delete-and-reinsert of items never blocks; analysis rows
+are simply recomputed by re-running the pipeline.
+
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
-| `topics` | id, name, slug | |
-| `item_topics` | item_id FK, topic_id FK, confidence | |
-| `cluster_runs` | id, method, params (jsonb), embedding_model, status, created_at | Clustering is versioned; re-running creates a new run. |
-| `clusters` | id, run_id FK, label, description_md, size | Labels AI-generated, user-editable. |
-| `item_clusters` | item_id FK, cluster_id FK | |
+| `topics` | id, name, slug (unique) | Upserted by slug (`services/analysis/topics.py::slugify`), so re-running topic extraction never duplicates. |
+| `item_topics` | item_id FK (cascade), topic_id FK (cascade), confidence — PK (item_id, topic_id) | Delete-and-reinserted per item by the topics job; confidence 0–1 from the LLM (max kept when two names slug identically). |
+| `cluster_runs` | id, method, params (jsonb: distance_threshold, linkage, metric, min_cluster_size, near_duplicate_similarity_threshold), embedding_model, status (`running\|succeeded\|failed` enum `cluster_run_status`), created_at | Clustering is versioned; every execution creates a new run and older runs are retained. |
+| `clusters` | id, run_id FK (cascade), label (nullable), description_md (nullable), size | Only clusters of ≥ 2 members are persisted (singletons stay unclustered). Label/description are AI-filled **only while NULL** and user-editable via `PATCH /api/clusters/{id}` — edits survive topic-job re-runs. |
+| `item_clusters` | item_id FK (cascade), cluster_id FK (cascade) — PK (item_id, cluster_id) | |
 
 ## Projects & artifacts
 
@@ -52,7 +57,7 @@ and `ai_requests` never contain message content — IDs and counts only.**
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
 | `jobs` | id, rq_job_id, kind (`demo\|import_scan\|import_extract\|enrich_batch\|embed_batch\|cluster\|topics\|generate_projects\|generate_artifact\|export_bundle\|delete_data`), status (`queued\|running\|succeeded\|failed\|cancelled`), progress, total, payload (jsonb — **IDs only**), error (redacted: exception class name, never message text), created_at, started_at, finished_at | Mirror of RQ state, DB is source of truth for the UI. `demo` is the M1 job-loop proof task. |
-| `ai_requests` | id, job_id FK, provider, model, task, prompt_tokens, completion_tokens, est_cost_usd, latency_ms, status, created_at | **No prompt/response bodies** — cost observability without content. |
+| `ai_requests` | id, job_id FK (nullable), provider, model, task, prompt_tokens, completion_tokens, est_cost_usd (numeric 10,6), latency_ms, status (`success\|invalid_output\|error` enum `ai_request_status`), created_at | **Content-free by construction — the table has no text columns at all.** One row per provider call including repair retries and failures, committed immediately so the audit survives job-failure rollbacks. `ix_ai_requests_created_at` backs the monthly-budget SUM (migration `0006`). |
 
 Sessions live in Redis (server-side), not in Postgres.
 

@@ -88,7 +88,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure environment
-        run: cp .env.example .env
+        # Hermetic e2e: the deterministic mock embedding provider avoids the
+        # one-time fastembed model download (the only network fetch the
+        # analysis pipeline could make). AI_PROVIDER is already mock.
+        run: |
+          cp .env.example .env
+          echo "EMBEDDING_PROVIDER=mock" >> .env
       - name: Start compose stack
         run: docker compose up -d --build
       - uses: actions/setup-node@v4
