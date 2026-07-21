@@ -411,6 +411,8 @@ export interface SettingsRead {
   // Per-tier model-name overrides for the active provider ("generation"/"fast").
   model_overrides: Record<string, string>;
   monthly_budget_usd: number | null;
+  // Scoring-dimension weights (M7); missing dimensions default to 1.0.
+  scoring_weights: Record<string, number>;
 }
 
 export interface AiSettingsPatch {
@@ -566,4 +568,351 @@ export async function updateCluster(clusterId: number, patch: ClusterPatch): Pro
     );
   }
   return (await response.json()) as ClusterRead;
+}
+
+// --- projects (M7) -----------------------------------------------------------
+
+export type ProjectStatus =
+  | "idea"
+  | "shortlisted"
+  | "planned"
+  | "in_progress"
+  | "completed"
+  | "archived";
+
+export const PROJECT_STATUSES: readonly ProjectStatus[] = [
+  "idea",
+  "shortlisted",
+  "planned",
+  "in_progress",
+  "completed",
+  "archived",
+];
+
+export interface SubScore {
+  score: number;
+  rationale: string;
+}
+
+export interface ProjectSource {
+  item_ids?: number[];
+  cluster_ids?: number[];
+  prompt_version?: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface ProjectRead {
+  id: number;
+  title: string;
+  one_liner: string;
+  summary_md: string;
+  domains: string[];
+  difficulty: string | null;
+  duration_estimate: string | null;
+  datasets: string[];
+  tech_stack: string[];
+  skills_demonstrated: string[];
+  risks: string[];
+  // Sub-scores by dimension; the weighted total is computed client-side
+  // (lib/scoring.ts) so weight changes re-rank without any API call.
+  scores: Record<string, SubScore | undefined>;
+  status: ProjectStatus;
+  source: ProjectSource;
+  parent_project_ids: number[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type MilestoneStatus = "todo" | "doing" | "done";
+
+export const MILESTONE_STATUSES: readonly MilestoneStatus[] = ["todo", "doing", "done"];
+
+export interface MilestoneRead {
+  id: number;
+  project_id: number;
+  title: string;
+  description: string | null;
+  sort_order: number;
+  status: MilestoneStatus;
+  target_date: string | null;
+}
+
+export interface ProjectDetail extends ProjectRead {
+  milestones: MilestoneRead[];
+}
+
+export interface ProjectListResponse {
+  projects: ProjectRead[];
+  total: number;
+}
+
+export interface GenerateAccepted {
+  job_id: number;
+}
+
+export interface GenerateProjectsPayload {
+  cluster_ids?: number[];
+  item_ids?: number[];
+  count?: number;
+}
+
+export interface ProjectPatch {
+  title?: string;
+  one_liner?: string;
+  summary_md?: string;
+  domains?: string[];
+  difficulty?: string | null;
+  duration_estimate?: string | null;
+  datasets?: string[];
+  tech_stack?: string[];
+  skills_demonstrated?: string[];
+  risks?: string[];
+  status?: ProjectStatus;
+}
+
+export interface MilestonePayload {
+  title: string;
+  description?: string | null;
+  status?: MilestoneStatus;
+  target_date?: string | null;
+}
+
+export interface MilestonePatch {
+  title?: string;
+  description?: string | null;
+  status?: MilestoneStatus;
+  target_date?: string | null;
+}
+
+export interface AdvisorPayload {
+  commonality: { verdict: string; reasoning: string };
+  comparative_strength: string;
+  recruiter_impact: string;
+  prerequisites: string[];
+  week_by_week: { week: number; focus: string; deliverable: string }[];
+}
+
+export interface AdvisorReviewRead {
+  id: number;
+  project_id: number;
+  version: number;
+  content_md: string;
+  payload: AdvisorPayload | null;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  created_at: string;
+}
+
+export async function generateProjects(
+  payload: GenerateProjectsPayload,
+): Promise<GenerateAccepted> {
+  const response = await fetch("/api/projects/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `project generation failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as GenerateAccepted;
+}
+
+export async function combineProjects(
+  parentProjectIds: [number, number],
+): Promise<GenerateAccepted> {
+  const response = await fetch("/api/projects/combine", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent_project_ids: parentProjectIds }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `combine failed with status ${response.status}`);
+  }
+  return (await response.json()) as GenerateAccepted;
+}
+
+export async function listProjects(): Promise<ProjectListResponse> {
+  const response = await fetch("/api/projects", { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `projects fetch failed with status ${response.status}`);
+  }
+  return (await response.json()) as ProjectListResponse;
+}
+
+export async function getProject(projectId: number): Promise<ProjectDetail> {
+  const response = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `project fetch failed with status ${response.status}`);
+  }
+  return (await response.json()) as ProjectDetail;
+}
+
+export async function updateProject(projectId: number, patch: ProjectPatch): Promise<ProjectRead> {
+  const response = await fetch(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `project update failed with status ${response.status}`);
+  }
+  return (await response.json()) as ProjectRead;
+}
+
+export async function regenerateProject(projectId: number): Promise<GenerateAccepted> {
+  const response = await fetch(`/api/projects/${projectId}/regenerate`, { method: "POST" });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `regenerate failed with status ${response.status}`);
+  }
+  return (await response.json()) as GenerateAccepted;
+}
+
+export async function requestAdvisorReview(projectId: number): Promise<GenerateAccepted> {
+  const response = await fetch(`/api/projects/${projectId}/advisor`, { method: "POST" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `advisor request failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as GenerateAccepted;
+}
+
+export async function listAdvisorReviews(projectId: number): Promise<AdvisorReviewRead[]> {
+  const response = await fetch(`/api/projects/${projectId}/advisor`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `advisor reviews fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as AdvisorReviewRead[];
+}
+
+export async function createMilestone(
+  projectId: number,
+  payload: MilestonePayload,
+): Promise<MilestoneRead> {
+  const response = await fetch(`/api/projects/${projectId}/milestones`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `milestone create failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as MilestoneRead;
+}
+
+export async function updateMilestone(
+  projectId: number,
+  milestoneId: number,
+  patch: MilestonePatch,
+): Promise<MilestoneRead> {
+  const response = await fetch(`/api/projects/${projectId}/milestones/${milestoneId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `milestone update failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as MilestoneRead;
+}
+
+export async function deleteMilestone(projectId: number, milestoneId: number): Promise<void> {
+  const response = await fetch(`/api/projects/${projectId}/milestones/${milestoneId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `milestone delete failed with status ${response.status}`,
+    );
+  }
+}
+
+export async function reorderMilestones(
+  projectId: number,
+  milestoneIds: number[],
+): Promise<MilestoneRead[]> {
+  const response = await fetch(`/api/projects/${projectId}/milestones/order`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ milestone_ids: milestoneIds }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `milestone reorder failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as MilestoneRead[];
+}
+
+// --- career profile (M7) -----------------------------------------------------
+
+export interface CareerProfileRead {
+  background_md: string | null;
+  skills: string[];
+  target_domains: string[];
+  experience_level: string | null;
+  constraints: Record<string, string>;
+  interests_md: string | null;
+}
+
+export async function getCareerProfile(): Promise<CareerProfileRead> {
+  const response = await fetch("/api/career-profile", { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `career profile fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as CareerProfileRead;
+}
+
+export async function updateCareerProfile(
+  profile: CareerProfileRead,
+): Promise<CareerProfileRead> {
+  const response = await fetch("/api/career-profile", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `career profile update failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as CareerProfileRead;
+}
+
+export async function updateScoringWeights(
+  weights: Record<string, number>,
+): Promise<SettingsRead> {
+  const response = await fetch("/api/settings/scoring", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scoring_weights: weights }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `scoring weights update failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as SettingsRead;
 }

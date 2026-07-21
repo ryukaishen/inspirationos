@@ -71,6 +71,7 @@ describe("ItemCard", () => {
       ai_provider: "mock",
       model_overrides: {},
       monthly_budget_usd: null,
+      scoring_weights: {},
     });
   });
 
@@ -115,6 +116,7 @@ describe("ItemCard", () => {
       ai_provider: "mock",
       model_overrides: {},
       monthly_budget_usd: null,
+      scoring_weights: {},
     });
     mockedEnrichItems.mockResolvedValue({ job_id: 42 });
     renderWithClient(

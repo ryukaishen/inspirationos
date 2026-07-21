@@ -219,23 +219,24 @@ cd e2e && npx playwright test specs/clusters.spec.ts
 comparison, combination, advisor, roadmaps.
 
 Scope:
-- [ ] `generate_projects` job from selected clusters/items + career profile; source IDs echoed and verified.
-- [ ] Project library: cards, domain/status filters, score-sorted.
-- [ ] Transparent scoring UI: sub-score bars + per-score rationale text.
-- [ ] Weight sliders: instant client-side re-rank from stored sub-scores.
-- [ ] Side-by-side comparison (2–3 projects).
-- [ ] Combine-two-ideas flow (`CombinedProject`, parent links).
-- [ ] **Project Advisor** (`AdvisorReview`): commonality verdict, comparative strength, recruiter impact, prerequisites, week-by-week plan; versioned.
-- [ ] Project detail page; roadmap milestones CRUD + statuses; field editing; regenerate.
+- [x] `generate_projects` job from selected clusters/items + career profile; source IDs echoed and verified.
+- [x] Project library: cards, domain/status filters, score-sorted.
+- [x] Transparent scoring UI: sub-score bars + per-score rationale text.
+- [x] Weight sliders: instant client-side re-rank from stored sub-scores.
+- [x] Side-by-side comparison (2–3 projects).
+- [x] Combine-two-ideas flow (`CombinedProject`, parent links).
+- [x] **Project Advisor** (`AdvisorReview`): commonality verdict, comparative strength, recruiter impact, prerequisites, week-by-week plan; versioned.
+- [x] Project detail page; roadmap milestones CRUD + statuses; field editing; regenerate.
 
-Acceptance criteria:
-- [ ] MockProvider generation yields projects citing real source item/cluster IDs (server-verified).
-- [ ] Weight change re-orders the library with no generation API call.
-- [ ] Comparison view renders sub-scores aligned.
-- [ ] Combining two projects creates a child with both parent IDs.
-- [ ] Advisor renders all five structured sections, validates against schema, and regeneration versions it.
-- [ ] Milestones persist and reorder.
-- [ ] Playwright: generate → inspect scores → adjust weights → combine → advisor.
+Acceptance criteria (verified locally against the compose stack 2026-07-20;
+CI run still required — no commit has been made yet):
+- [x] MockProvider generation yields projects citing real source item/cluster IDs (server-verified).
+- [x] Weight change re-orders the library with no generation API call.
+- [x] Comparison view renders sub-scores aligned.
+- [x] Combining two projects creates a child with both parent IDs.
+- [x] Advisor renders all five structured sections, validates against schema, and regeneration versions it.
+- [x] Milestones persist and reorder.
+- [x] Playwright: generate → inspect scores → adjust weights → combine → advisor.
 
 Test commands:
 ```bash

@@ -18,22 +18,30 @@ from app.config import get_config
 from app.db import get_sessionmaker
 from app.models.analysis import Cluster, ClusterRun, ClusterRunStatus, ItemCluster, ItemTopic
 from app.models.app_settings import AppSettings
+from app.models.artifact import Artifact, ArtifactKind
 from app.models.conversation import Conversation
 from app.models.enrichment_attempt import EnrichmentAttempt, EnrichmentSource, EnrichmentStatus
 from app.models.import_ import Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item
 from app.models.job import Job, JobStatus
 from app.models.message import Message
+from app.models.project import Project
 from app.services.ai.budget import JobTokenTracker
 from app.services.ai.factory import get_llm_provider
 from app.services.ai.provider import ModelTier
 from app.services.ai.schemas import (
+    TASK_ADVISOR_REVIEW,
     TASK_CLUSTER_LABEL,
+    TASK_COMBINE_PROJECTS,
+    TASK_GENERATE_PROJECTS,
     TASK_TOPIC_EXTRACTION,
+    AdvisorReview,
     ClusterLabel,
+    CombinedProject,
+    ProjectIdeas,
     TopicExtraction,
 )
-from app.services.ai.structured import generate_validated
+from app.services.ai.structured import PROMPT_VERSION, generate_validated
 from app.services.analysis.clustering import (
     CLUSTER_METHOD,
     LINKAGE,
@@ -49,6 +57,19 @@ from app.services.analysis.topics import (
 )
 from app.services.enrichment import policy as enrichment_policy
 from app.services.enrichment.fetcher import EnrichmentFetcher, HttpEnrichmentFetcher
+from app.services.generation.advisor import (
+    build_advisor_context,
+    next_artifact_version,
+    render_advisor_markdown,
+)
+from app.services.generation.combine import build_combine_context, combined_source_ids
+from app.services.generation.projects import (
+    apply_generated_fields,
+    build_generation_context,
+    generation_source,
+    load_career_profile_context,
+    verify_idea_grounding,
+)
 from app.services.ingest.format_detection import count_message_json_files
 from app.services.ingest.instagram.export_reader import (
     iter_threads,
@@ -767,6 +788,306 @@ def run_topics(job_id: int, cluster_run_id: int | None = None) -> None:
                 job.progress += 1
                 session.commit()
 
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_generate_projects(
+    job_id: int,
+    item_ids: list[int] | None = None,
+    cluster_ids: list[int] | None = None,
+    count: int | None = None,
+) -> None:
+    """Generate grounded project ideas from selected clusters/items + career
+    profile (M7). One generation-tier LLM call returns the whole batch; every
+    idea's echoed source item/cluster ids are verified server-side before any
+    project row is written — a fabricated citation fails the job.
+    """
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 1
+        session.commit()
+        try:
+            config = get_config()
+            requested_item_ids = list(item_ids or [])
+            requested_cluster_ids = list(cluster_ids or [])
+            requested_count = count if count is not None else config.projects_default_count
+            requested_count = max(1, min(requested_count, config.projects_max_count))
+            context, allowed_item_ids = build_generation_context(
+                session,
+                config,
+                item_ids=requested_item_ids,
+                cluster_ids=requested_cluster_ids,
+                count=requested_count,
+            )
+            settings = session.get(AppSettings, 1)
+            provider = get_llm_provider(settings, config)
+            model = provider.resolve_model(ModelTier.generation)
+            tracker = JobTokenTracker(config.ai_job_token_budget)
+
+            result = generate_validated(
+                session,
+                provider,
+                task=TASK_GENERATE_PROJECTS,
+                context=context,
+                schema=ProjectIdeas,
+                model=model,
+                config=config,
+                job_id=job.id,
+                token_tracker=tracker,
+            )
+            job.total = 1 + len(result.ideas)
+            job.progress = 1
+            session.commit()
+
+            # Verify the whole batch before persisting any of it: one
+            # ungrounded idea fails the generation, no partial writes.
+            allowed_cluster_ids = set(requested_cluster_ids)
+            for idea in result.ideas:
+                verify_idea_grounding(
+                    idea,
+                    allowed_item_ids=allowed_item_ids,
+                    allowed_cluster_ids=allowed_cluster_ids,
+                )
+            for idea in result.ideas:
+                project = Project()
+                apply_generated_fields(project, idea)
+                project.source = generation_source(
+                    item_ids=idea.source_item_ids,
+                    cluster_ids=idea.source_cluster_ids,
+                    prompt_version=PROMPT_VERSION,
+                    provider=provider.name,
+                    model=model,
+                )
+                session.add(project)
+                job.progress += 1
+                session.commit()
+
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_combine_projects(job_id: int, parent_project_ids: list[int]) -> None:
+    """Combine two parent projects into one child (M7). The child's `source`
+    is the union of the parents' provenance and `parent_project_ids` links
+    both parents; the provider only ever sees the parents' generated text."""
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 2
+        session.commit()
+        try:
+            config = get_config()
+            parents = [session.get(Project, parent_id) for parent_id in parent_project_ids]
+            loaded = [parent for parent in parents if parent is not None]
+            if len(loaded) != 2 or len(parent_project_ids) != 2:
+                raise ValueError("combine requires exactly two existing parent projects")
+
+            settings = session.get(AppSettings, 1)
+            provider = get_llm_provider(settings, config)
+            model = provider.resolve_model(ModelTier.generation)
+            tracker = JobTokenTracker(config.ai_job_token_budget)
+
+            result = generate_validated(
+                session,
+                provider,
+                task=TASK_COMBINE_PROJECTS,
+                context=build_combine_context(loaded, load_career_profile_context(session)),
+                schema=CombinedProject,
+                model=model,
+                config=config,
+                job_id=job.id,
+                token_tracker=tracker,
+            )
+            job.progress = 1
+            session.commit()
+
+            source_item_ids, source_cluster_ids = combined_source_ids(loaded)
+            child = Project()
+            apply_generated_fields(child, result)
+            child.source = generation_source(
+                item_ids=source_item_ids,
+                cluster_ids=source_cluster_ids,
+                prompt_version=PROMPT_VERSION,
+                provider=provider.name,
+                model=model,
+            )
+            child.parent_project_ids = [parent.id for parent in loaded]
+            session.add(child)
+            job.progress = 2
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_regenerate_project(job_id: int, project_id: int) -> None:
+    """Regenerate one project from its stored source ids (M7). Replaces the
+    generated fields only — status, milestones, parent links, and existing
+    advisor reviews are user-owned state and survive untouched."""
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 2
+        session.commit()
+        try:
+            config = get_config()
+            project = session.get(Project, project_id)
+            if project is None:
+                raise ValueError(f"projects row {project_id} does not exist")
+            source = project.source or {}
+            source_item_ids = [int(value) for value in source.get("item_ids", [])]
+            source_cluster_ids = [int(value) for value in source.get("cluster_ids", [])]
+            context, allowed_item_ids = build_generation_context(
+                session,
+                config,
+                item_ids=source_item_ids,
+                cluster_ids=source_cluster_ids,
+                count=1,
+            )
+            settings = session.get(AppSettings, 1)
+            provider = get_llm_provider(settings, config)
+            model = provider.resolve_model(ModelTier.generation)
+            tracker = JobTokenTracker(config.ai_job_token_budget)
+
+            result = generate_validated(
+                session,
+                provider,
+                task=TASK_GENERATE_PROJECTS,
+                context=context,
+                schema=ProjectIdeas,
+                model=model,
+                config=config,
+                job_id=job.id,
+                token_tracker=tracker,
+            )
+            job.progress = 1
+            session.commit()
+
+            idea = result.ideas[0]
+            verify_idea_grounding(
+                idea,
+                allowed_item_ids=allowed_item_ids,
+                allowed_cluster_ids=set(source_cluster_ids),
+            )
+            apply_generated_fields(project, idea)
+            project.source = generation_source(
+                item_ids=idea.source_item_ids,
+                cluster_ids=idea.source_cluster_ids,
+                prompt_version=PROMPT_VERSION,
+                provider=provider.name,
+                model=model,
+            )
+            job.progress = 2
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_advisor_review(job_id: int, project_id: int) -> None:
+    """Project Advisor (M7): one generation-tier call producing the five
+    structured sections, stored as a versioned `advisor_review` artifact.
+    Re-running appends the next version; earlier versions stay."""
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 2
+        session.commit()
+        try:
+            config = get_config()
+            project = session.get(Project, project_id)
+            if project is None:
+                raise ValueError(f"projects row {project_id} does not exist")
+            library = list(session.scalars(select(Project).order_by(Project.id)))
+
+            settings = session.get(AppSettings, 1)
+            provider = get_llm_provider(settings, config)
+            model = provider.resolve_model(ModelTier.generation)
+            tracker = JobTokenTracker(config.ai_job_token_budget)
+
+            review = generate_validated(
+                session,
+                provider,
+                task=TASK_ADVISOR_REVIEW,
+                context=build_advisor_context(
+                    project, library, load_career_profile_context(session)
+                ),
+                schema=AdvisorReview,
+                model=model,
+                config=config,
+                job_id=job.id,
+                token_tracker=tracker,
+            )
+            job.progress = 1
+            session.commit()
+
+            session.add(
+                Artifact(
+                    project_id=project.id,
+                    kind=ArtifactKind.advisor_review,
+                    content_md=render_advisor_markdown(review),
+                    payload=review.model_dump(),
+                    provider=provider.name,
+                    model=model,
+                    prompt_version=PROMPT_VERSION,
+                    version=next_artifact_version(session, project.id, ArtifactKind.advisor_review),
+                )
+            )
+            job.progress = 2
             job.status = JobStatus.succeeded
             job.finished_at = _utcnow()
             session.commit()

@@ -27,9 +27,16 @@ from app.services.ai.provider import (
     RawGeneration,
 )
 from app.services.ai.schemas import (
+    TASK_ADVISOR_REVIEW,
     TASK_CLUSTER_LABEL,
+    TASK_COMBINE_PROJECTS,
+    TASK_GENERATE_PROJECTS,
     TASK_TOPIC_EXTRACTION,
+    AdvisorReview,
     ClusterLabel,
+    CombinedProject,
+    ProjectIdeas,
+    ProjectScores,
     TopicExtraction,
 )
 from app.services.ai.structured import StructuredOutputError, generate_validated
@@ -121,6 +128,134 @@ def test_mock_cluster_label_derives_from_shared_tokens() -> None:
     parsed = ClusterLabel.model_validate(json.loads(raw.text))
     assert "Pasta" in parsed.label
     assert parsed.description_md
+
+
+GENERATE_CONTEXT = {
+    "items": [
+        {"item_id": 21, "text": "sourdough starter feeding schedule tips"},
+        {"item_id": 22, "text": "sourdough scoring patterns for beginners"},
+        {"item_id": 23, "text": "bouldering grip strength training plan"},
+        {"item_id": 24, "text": "bouldering footwork drills session"},
+    ],
+    "clusters": [
+        {"cluster_id": 5, "label": "Sourdough", "description": "Bread items"},
+        {"cluster_id": 6, "label": "Bouldering", "description": "Climbing items"},
+    ],
+    "career_profile": {"target_domains": ["data science", "applied ai"]},
+    "count": 2,
+}
+COMBINE_CONTEXT = {
+    "parents": [
+        {
+            "project_id": 1,
+            "title": "Sourdough Tracker",
+            "one_liner": "Track starter health",
+            "domains": ["data science"],
+            "tech_stack": ["python"],
+            "skills_demonstrated": ["time series"],
+        },
+        {
+            "project_id": 2,
+            "title": "Climb Coach",
+            "one_liner": "Grade climbing sessions",
+            "domains": ["applied ai"],
+            "tech_stack": ["python", "postgres"],
+            "skills_demonstrated": ["classification"],
+        },
+    ],
+    "career_profile": {"target_domains": ["data science"]},
+}
+ADVISOR_CONTEXT = {
+    "project": {
+        "title": "Sourdough Tracker",
+        "one_liner": "Track starter health over time",
+        "summary_md": "Track sourdough starter fermentation with sensors.",
+    },
+    "library": [{"project_id": 2, "title": "Climb Coach", "one_liner": "Grade sessions"}],
+    "career_profile": {"target_domains": ["data science"]},
+}
+
+
+def test_mock_generate_projects_is_schema_valid_and_grounded() -> None:
+    raw = MockProvider().generate_raw(
+        task=TASK_GENERATE_PROJECTS,
+        instructions="x",
+        context=GENERATE_CONTEXT,
+        schema=ProjectIdeas,
+        model=MOCK_MODEL,
+    )
+    parsed = ProjectIdeas.model_validate(json.loads(raw.text))
+    assert len(parsed.ideas) == 2
+    given_item_ids = {21, 22, 23, 24}
+    for idea in parsed.ideas:
+        assert idea.source_item_ids
+        assert set(idea.source_item_ids) <= given_item_ids
+        assert set(idea.source_cluster_ids) == {5, 6}
+        for dimension in ProjectScores.model_fields:
+            sub_score = getattr(idea.scores, dimension)
+            assert 0.0 <= sub_score.score <= 10.0
+            assert sub_score.rationale
+    # Career-profile domains flow into the ideas.
+    assert parsed.ideas[0].domains == ["data science", "applied ai"]
+
+
+def test_mock_generate_projects_is_deterministic() -> None:
+    provider = MockProvider()
+    kwargs: dict = {
+        "task": TASK_GENERATE_PROJECTS,
+        "instructions": "x",
+        "context": GENERATE_CONTEXT,
+        "schema": ProjectIdeas,
+        "model": MOCK_MODEL,
+    }
+    assert provider.generate_raw(**kwargs).text == provider.generate_raw(**kwargs).text
+
+
+def test_mock_generate_projects_requires_items() -> None:
+    with pytest.raises(ProviderError):
+        MockProvider().generate_raw(
+            task=TASK_GENERATE_PROJECTS,
+            instructions="x",
+            context={"items": [], "count": 1},
+            schema=ProjectIdeas,
+            model=MOCK_MODEL,
+        )
+
+
+def test_mock_combine_projects_merges_both_parents() -> None:
+    raw = MockProvider().generate_raw(
+        task=TASK_COMBINE_PROJECTS,
+        instructions="x",
+        context=COMBINE_CONTEXT,
+        schema=CombinedProject,
+        model=MOCK_MODEL,
+    )
+    parsed = CombinedProject.model_validate(json.loads(raw.text))
+    assert "Sourdough Tracker" in parsed.title
+    assert "Climb Coach" in parsed.title
+    # Union of both parents' stacks.
+    assert set(parsed.tech_stack) == {"python", "postgres"}
+    assert set(parsed.domains) == {"data science", "applied ai"}
+
+
+def test_mock_advisor_review_has_all_five_sections() -> None:
+    raw = MockProvider().generate_raw(
+        task=TASK_ADVISOR_REVIEW,
+        instructions="x",
+        context=ADVISOR_CONTEXT,
+        schema=AdvisorReview,
+        model=MOCK_MODEL,
+    )
+    parsed = AdvisorReview.model_validate(json.loads(raw.text))
+    assert parsed.commonality.verdict in {"very_common", "common", "uncommon", "novel"}
+    assert parsed.commonality.reasoning
+    assert parsed.comparative_strength
+    assert parsed.recruiter_impact
+    assert parsed.prerequisites
+    assert parsed.week_by_week
+    assert [entry.week for entry in parsed.week_by_week] == sorted(
+        entry.week for entry in parsed.week_by_week
+    )
 
 
 def test_mock_provider_rejects_unknown_task() -> None:

@@ -74,6 +74,14 @@ class AppConfig(BaseSettings):
     topics_max_chars_per_item: int = 500
     topics_max_items_per_cluster: int = 30
 
+    # Project generation (M7): context caps mirror the topics caps; count is
+    # how many ideas one generation batch asks for (request can override up
+    # to the max).
+    projects_max_items: int = 60
+    projects_max_chars_per_item: int = 400
+    projects_default_count: int = 3
+    projects_max_count: int = 10
+
 
 @lru_cache
 def get_config() -> AppConfig:

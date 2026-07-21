@@ -46,6 +46,11 @@ are simply recomputed by re-running the pipeline.
 
 ## Projects & artifacts
 
+All added by migration `0007` (M7), purely additive; `career_profile` (above)
+is seeded empty (id=1) by the same migration so `GET /api/career-profile`
+always has a row. `project_milestones`/`artifacts` FKs cascade on project
+deletion.
+
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
 | `projects` | id, title, one_liner, summary_md, domains (text[]), difficulty, duration_estimate, datasets (jsonb), tech_stack (jsonb), skills_demonstrated (jsonb), risks (jsonb), scores (jsonb — sub-scores 0–10 each with rationale string), status (`idea\|shortlisted\|planned\|in_progress\|completed\|archived`), source (jsonb: item_ids, cluster_ids, prompt_version, provider, model), parent_project_ids (int[]), timestamps | `parent_project_ids` links combined ideas to both parents. Source item/cluster IDs are verified to exist. |
@@ -65,7 +70,15 @@ Sessions live in Redis (server-side), not in Postgres.
 
 - **Score computation:** final project score = `Σ(weight_i × subscore_i)` from
   `settings.scoring_weights`, computed at read time. Changing weights re-ranks
-  instantly; stored data never changes.
+  instantly; stored data never changes. The five fixed dimensions (M7) are
+  `career_alignment`, `technical_depth`, `originality`, `feasibility`,
+  `recruiter_appeal` — defined once by the `ProjectScores` AI schema
+  (`services/ai/schemas.py`) and reused as `SCORE_DIMENSIONS` in
+  `services/generation/scoring.py`; the frontend's `lib/scoring.ts` mirrors the
+  same constant and math so client-side re-rank matches the backend exactly.
+  Weights are floats in `[0.0, 2.0]` (default `1.0` for an omitted dimension),
+  validated by `scoring.validate_weights` and set via
+  `PATCH /api/settings/scoring`.
 - **Anti-hallucination invariant:** an item may enter AI-generation context
   only if at least one of share_text / adjacent_text / enriched_caption /
   context_note is non-empty. Enforced in the query that assembles generation

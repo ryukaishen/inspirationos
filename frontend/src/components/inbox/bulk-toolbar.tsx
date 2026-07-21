@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
+  ApiError,
   ITEM_STATUSES,
   bulkUpdateItems,
   enrichItems,
+  generateProjects,
   getSettings,
   type ItemEntry,
   type ItemStatus,
@@ -82,6 +84,12 @@ export function BulkToolbar({ selectedIds, entries, onClearSelection }: BulkTool
   const enrichSelection = useMutation({
     mutationFn: () =>
       enrichItems({ item_ids: selectedIds, duplicate_group_ids: duplicateGroupIds }),
+  });
+
+  // The "selected items" half of M7 generation — clusters are picked on the
+  // Projects page; this grounds a generation batch in an explicit selection.
+  const generateFromSelection = useMutation({
+    mutationFn: () => generateProjects({ item_ids: selectedIds }),
   });
 
   if (selectedIds.length === 0) {
@@ -165,6 +173,27 @@ export function BulkToolbar({ selectedIds, entries, onClearSelection }: BulkTool
         >
           {enrichSelection.isPending ? "Enriching…" : "Enrich selection"}
         </Button>
+      )}
+      <Button
+        size="sm"
+        variant="outline"
+        data-testid="bulk-generate-projects"
+        onClick={() => generateFromSelection.mutate()}
+        disabled={generateFromSelection.isPending}
+      >
+        {generateFromSelection.isPending ? "Starting…" : "Generate projects"}
+      </Button>
+      {generateFromSelection.isSuccess && (
+        <span className="text-xs text-muted-foreground" data-testid="bulk-generate-status">
+          Generation job #{generateFromSelection.data.job_id} started — see Projects.
+        </span>
+      )}
+      {generateFromSelection.isError && (
+        <span className="text-xs text-destructive" data-testid="bulk-generate-error">
+          {generateFromSelection.error instanceof ApiError
+            ? generateFromSelection.error.message
+            : "Generation request failed."}
+        </span>
       )}
       <Button size="sm" variant="ghost" onClick={onClearSelection}>
         Clear selection

@@ -380,6 +380,9 @@ def main(argv: list[str] | None = None) -> None:
     build_rich_export_zip(out / "rich_a.zip", variant="a", unique=args.unique)
     build_rich_export_zip(out / "rich_b.zip", variant="b", unique=args.unique)
     build_cluster_export_zip(out / "clusters.zip", unique=args.unique)
+    # Same logical content, distinct checksum: projects.spec.ts uploads its
+    # own archive so checksum dedupe can't 409 against clusters.spec.ts.
+    build_cluster_export_zip(out / "projects.zip", unique=f"{args.unique}-projects")
     build_html_export_zip(out / "html_export.zip")
     build_zip_slip_zip(out / "zip_slip.zip")
     build_ratio_bomb_zip(out / "zip_bomb_ratio.zip")

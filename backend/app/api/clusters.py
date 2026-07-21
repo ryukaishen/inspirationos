@@ -1,4 +1,4 @@
-"""Analysis triggers (embed → cluster → topics) and cluster browsing/editing.
+"""Analysis triggers (embed -> cluster -> topics) and cluster browsing/editing.
 
 Triggers follow the repo convention: jobs row first, then enqueue onto the
 `ai` queue, 503 + failed job when the queue is unreachable. Payloads carry IDs
@@ -11,15 +11,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from redis import Redis
-from rq import Queue
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api.enqueue import enqueue_job
 from app.db import get_db_session
 from app.models.analysis import Cluster, ClusterRun, ClusterRunStatus, ItemCluster, ItemTopic, Topic
 from app.models.item import Item
-from app.models.job import Job, JobKind, JobStatus
-from app.queues import QUEUE_AI
+from app.models.job import JobKind
 from app.redis_client import get_redis
 from app.schemas.cluster import (
     AnalysisAccepted,
@@ -39,40 +38,16 @@ router = APIRouter(tags=["analysis"])
 CLUSTER_NOT_FOUND_MESSAGE = "cluster not found"
 RUN_NOT_FOUND_MESSAGE = "cluster run not found"
 NO_SUCCEEDED_RUN_MESSAGE = "no succeeded cluster run exists yet — run clustering first"
-QUEUE_UNAVAILABLE_MESSAGE = "job queue unavailable"
 
 DbSession = Annotated[Session, Depends(get_db_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
-
-
-def _enqueue_job(
-    db: Session, redis: Redis, *, kind: JobKind, payload: dict[str, object], func_path: str
-) -> Job:
-    """Jobs-row-then-enqueue; enqueue failure marks the row failed and 503s."""
-    job = Job(kind=kind, status=JobStatus.queued, payload=payload)
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    try:
-        rq_job = Queue(QUEUE_AI, connection=redis).enqueue(func_path, job.id, **payload)
-    except Exception as exc:
-        job.status = JobStatus.failed
-        job.error = type(exc).__name__
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "queue_unavailable", "message": QUEUE_UNAVAILABLE_MESSAGE},
-        ) from exc
-    job.rq_job_id = rq_job.id
-    db.commit()
-    return job
 
 
 @router.post(
     "/analysis/embed", response_model=AnalysisAccepted, status_code=status.HTTP_202_ACCEPTED
 )
 def trigger_embed(body: EmbedRequest, db: DbSession, redis: RedisDep) -> AnalysisAccepted:
-    job = _enqueue_job(
+    job = enqueue_job(
         db,
         redis,
         kind=JobKind.embed_batch,
@@ -88,7 +63,7 @@ def trigger_embed(body: EmbedRequest, db: DbSession, redis: RedisDep) -> Analysi
 def trigger_cluster(
     body: ClusterTriggerRequest, db: DbSession, redis: RedisDep
 ) -> AnalysisAccepted:
-    job = _enqueue_job(
+    job = enqueue_job(
         db,
         redis,
         kind=JobKind.cluster,
@@ -117,7 +92,7 @@ def trigger_topics(body: TopicsTriggerRequest, db: DbSession, redis: RedisDep) -
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "no_cluster_run", "message": NO_SUCCEEDED_RUN_MESSAGE},
             )
-    job = _enqueue_job(
+    job = enqueue_job(
         db,
         redis,
         kind=JobKind.topics,

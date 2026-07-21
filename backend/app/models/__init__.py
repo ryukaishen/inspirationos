@@ -8,13 +8,16 @@ from app.models.analysis import (
     Topic,
 )
 from app.models.app_settings import AiProvider, AppSettings
+from app.models.artifact import Artifact, ArtifactKind
 from app.models.base import Base
+from app.models.career_profile import CareerProfile
 from app.models.conversation import Conversation
 from app.models.enrichment_attempt import EnrichmentAttempt, EnrichmentSource, EnrichmentStatus
 from app.models.import_ import ExportFormat, Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item, ItemStatus, ItemType
 from app.models.job import Job, JobKind, JobStatus
 from app.models.message import Message
+from app.models.project import MilestoneStatus, Project, ProjectMilestone, ProjectStatus
 from app.models.user import User
 
 __all__ = [
@@ -22,7 +25,10 @@ __all__ = [
     "AiRequest",
     "AiRequestStatus",
     "AppSettings",
+    "Artifact",
+    "ArtifactKind",
     "Base",
+    "CareerProfile",
     "Cluster",
     "ClusterRun",
     "ClusterRunStatus",
@@ -44,6 +50,10 @@ __all__ = [
     "JobKind",
     "JobStatus",
     "Message",
+    "MilestoneStatus",
+    "Project",
+    "ProjectMilestone",
+    "ProjectStatus",
     "Topic",
     "User",
 ]

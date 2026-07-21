@@ -1,6 +1,6 @@
-"""Settings: the enrichment consent gate (M5) + AI provider/model/budget (M6).
+"""Settings: the enrichment consent gate (M5), AI provider/model/budget (M6),
+and scoring weights (M7; the career profile has its own router, career.py).
 
-scoring_weights/career-profile settings arrive with M7's own Settings UI.
 API keys are environment-only — they are never read from or written to the DB
 and never appear in any request or response body.
 """
@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db_session
 from app.models.app_settings import AppSettings
-from app.schemas.settings import AiSettingsUpdateRequest, EnrichmentToggleRequest, SettingsRead
+from app.schemas.settings import (
+    AiSettingsUpdateRequest,
+    EnrichmentToggleRequest,
+    ScoringWeightsUpdateRequest,
+    SettingsRead,
+)
+from app.services.generation.scoring import InvalidWeightsError, validate_weights
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -69,5 +75,22 @@ def update_ai_settings(body: AiSettingsUpdateRequest, db: DbSession) -> AppSetti
         )
     if "monthly_budget_usd" in fields:
         settings.monthly_budget_usd = body.monthly_budget_usd
+    db.commit()
+    return settings
+
+
+@router.patch("/scoring", response_model=SettingsRead)
+def update_scoring_weights(body: ScoringWeightsUpdateRequest, db: DbSession) -> AppSettings:
+    """Replace the scoring-weights mapping (M7). Changing weights re-ranks the
+    project library instantly on the client — stored sub-scores never change
+    and no generation job is enqueued here."""
+    settings = _get_settings_or_404(db)
+    try:
+        settings.scoring_weights = validate_weights(body.scoring_weights)
+    except InvalidWeightsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_weights", "message": str(exc)},
+        ) from exc
     db.commit()
     return settings

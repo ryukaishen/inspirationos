@@ -25,6 +25,10 @@ export default function Home() {
             Clusters
           </Link>
           {" · "}
+          <Link className="underline" href="/projects">
+            Projects
+          </Link>
+          {" · "}
           <Link className="underline" href="/settings">
             Settings
           </Link>

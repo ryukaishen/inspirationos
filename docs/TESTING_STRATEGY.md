@@ -23,13 +23,15 @@ ZIPs at test time (nothing export-like is committed):
   misses, exact + tracking-parameter duplicates, an external link, and
   mojibake strings whose exact expected decodings are exported as module
   constants for test assertions.
-- **Cluster export** (`build_cluster_export_zip`, emitted as `clusters.zip`;
-  M6) — one friend thread whose shares form two clearly-themed groups (high
-  token overlap within a theme, none across) plus a near-duplicate text pair
-  on distinct URLs. Deterministic clusters under both the mock and the real
-  local embedding provider; kept separate from the rich export so M4/M5
-  count assertions never shift. `clusters.spec.ts` uploads this one (each
-  spec file uploads its own ZIP — checksum dedupe would 409 a re-upload).
+- **Cluster export** (`build_cluster_export_zip`, emitted as `clusters.zip`
+  and, with a distinct `--unique` marker, `projects.zip`; M6/M7) — one friend
+  thread whose shares form two clearly-themed groups (high token overlap
+  within a theme, none across) plus a near-duplicate text pair on distinct
+  URLs. Deterministic clusters under both the mock and the real local
+  embedding provider; kept separate from the rich export so M4/M5 count
+  assertions never shift. `clusters.spec.ts` uploads `clusters.zip` and
+  `projects.spec.ts` uploads `projects.zip` (each spec file uploads its own
+  ZIP — checksum dedupe would 409 a re-upload).
 - Mojibake/emoji strings (UTF-8-as-latin-1 escapes) with known expected
   decodings.
 - Multi-file paginated threads (`message_1.json`, `message_2.json`).
@@ -96,7 +98,10 @@ login → upload synthetic ZIP → confirm self-DM → extract → inbox counts 
 cluster → bulk-describe cluster → keyboard-review a needs_context item →
 generate projects → adjust weights (observe re-rank) → combine two ideas →
 advisor review → generate README → export Markdown/JSON → delete import →
-verify gone.
+verify gone. `projects.spec.ts` (M7) covers generate → score bars → weight
+re-rank (asserted with zero `/api/projects/generate` requests) → save
+weights → compare → combine → detail field edit → milestone add/reorder →
+advisor review with all five sections → regenerate advisor to v2.
 
 ## Canonical commands
 

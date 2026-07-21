@@ -13,12 +13,15 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getSettings: vi.fn(),
     updateEnrichmentSettings: vi.fn(),
     updateAiSettings: vi.fn(),
+    getCareerProfile: vi.fn(),
+    updateCareerProfile: vi.fn(),
   };
 });
 
 const mockedGetSettings = vi.mocked(api.getSettings);
 const mockedUpdate = vi.mocked(api.updateEnrichmentSettings);
 const mockedUpdateAi = vi.mocked(api.updateAiSettings);
+const mockedGetCareerProfile = vi.mocked(api.getCareerProfile);
 
 function settingsFixture(overrides: Partial<api.SettingsRead> = {}): api.SettingsRead {
   return {
@@ -27,9 +30,19 @@ function settingsFixture(overrides: Partial<api.SettingsRead> = {}): api.Setting
     ai_provider: "mock",
     model_overrides: {},
     monthly_budget_usd: null,
+    scoring_weights: {},
     ...overrides,
   };
 }
+
+const EMPTY_CAREER_PROFILE: api.CareerProfileRead = {
+  background_md: null,
+  skills: [],
+  target_domains: [],
+  experience_level: null,
+  constraints: {},
+  interests_md: null,
+};
 
 function renderWithClient() {
   const queryClient = new QueryClient({
@@ -47,6 +60,8 @@ describe("SettingsPage", () => {
     mockedGetSettings.mockReset();
     mockedUpdate.mockReset();
     mockedUpdateAi.mockReset();
+    mockedGetCareerProfile.mockReset();
+    mockedGetCareerProfile.mockResolvedValue(EMPTY_CAREER_PROFILE);
   });
 
   it("shows the disclosure dialog before enabling, and does not call the API until confirmed", async () => {

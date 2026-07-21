@@ -13,13 +13,23 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   AI_PROVIDERS,
+  getCareerProfile,
   getSettings,
   updateAiSettings,
+  updateCareerProfile,
   updateEnrichmentSettings,
   type AiProvider,
 } from "@/lib/api";
+
+function parseList(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
@@ -29,10 +39,22 @@ export default function SettingsPage() {
   const [fastModel, setFastModel] = useState("");
   const [budget, setBudget] = useState("");
   const [aiFormReady, setAiFormReady] = useState(false);
+  const [background, setBackground] = useState("");
+  const [skills, setSkills] = useState("");
+  const [targetDomains, setTargetDomains] = useState("");
+  const [experienceLevel, setExperienceLevel] = useState("");
+  const [timeConstraint, setTimeConstraint] = useState("");
+  const [computeConstraint, setComputeConstraint] = useState("");
+  const [interests, setInterests] = useState("");
+  const [careerFormReady, setCareerFormReady] = useState(false);
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: getSettings,
+  });
+  const { data: careerProfile } = useQuery({
+    queryKey: ["career-profile"],
+    queryFn: getCareerProfile,
   });
 
   // Initialize the AI form once from the loaded settings (render-time state
@@ -43,6 +65,16 @@ export default function SettingsPage() {
     setFastModel(settings.model_overrides.fast ?? "");
     setBudget(settings.monthly_budget_usd === null ? "" : String(settings.monthly_budget_usd));
     setAiFormReady(true);
+  }
+  if (careerProfile && !careerFormReady) {
+    setBackground(careerProfile.background_md ?? "");
+    setSkills(careerProfile.skills.join(", "));
+    setTargetDomains(careerProfile.target_domains.join(", "));
+    setExperienceLevel(careerProfile.experience_level ?? "");
+    setTimeConstraint(String(careerProfile.constraints.time ?? ""));
+    setComputeConstraint(String(careerProfile.constraints.compute ?? ""));
+    setInterests(careerProfile.interests_md ?? "");
+    setCareerFormReady(true);
   }
 
   const toggle = useMutation({
@@ -64,6 +96,25 @@ export default function SettingsPage() {
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const saveCareer = useMutation({
+    mutationFn: () => {
+      const constraints: Record<string, string> = {};
+      if (timeConstraint.trim()) constraints.time = timeConstraint.trim();
+      if (computeConstraint.trim()) constraints.compute = computeConstraint.trim();
+      return updateCareerProfile({
+        background_md: background.trim() || null,
+        skills: parseList(skills),
+        target_domains: parseList(targetDomains),
+        experience_level: experienceLevel.trim() || null,
+        constraints,
+        interests_md: interests.trim() || null,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["career-profile"] });
     },
   });
 
@@ -199,6 +250,109 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      <div className="space-y-3 rounded-lg border bg-card p-4" data-testid="career-profile">
+        <div>
+          <p className="font-medium">Career profile</p>
+          <p className="text-sm text-muted-foreground">
+            Grounds project generation and the advisor: background, skills, target domains,
+            and constraints. Sent only to your configured AI provider — never logged.
+          </p>
+        </div>
+        <label className="block text-sm">
+          Background
+          <Textarea
+            data-testid="career-background"
+            className="mt-1"
+            rows={3}
+            value={background}
+            onChange={(event) => setBackground(event.target.value)}
+            placeholder="Who you are, what you've built, where you're headed…"
+          />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block text-sm">
+            Skills (comma-separated)
+            <Input
+              data-testid="career-skills"
+              className="mt-1"
+              value={skills}
+              onChange={(event) => setSkills(event.target.value)}
+              placeholder="python, sql, pytorch"
+            />
+          </label>
+          <label className="block text-sm">
+            Target domains (comma-separated)
+            <Input
+              data-testid="career-domains"
+              className="mt-1"
+              value={targetDomains}
+              onChange={(event) => setTargetDomains(event.target.value)}
+              placeholder="data science, healthcare ai"
+            />
+          </label>
+          <label className="block text-sm">
+            Experience level
+            <Input
+              data-testid="career-experience"
+              className="mt-1"
+              value={experienceLevel}
+              onChange={(event) => setExperienceLevel(event.target.value)}
+              placeholder="student / junior / intermediate…"
+            />
+          </label>
+          <label className="block text-sm">
+            Time constraint
+            <Input
+              data-testid="career-time"
+              className="mt-1"
+              value={timeConstraint}
+              onChange={(event) => setTimeConstraint(event.target.value)}
+              placeholder="e.g. 10 hours/week"
+            />
+          </label>
+          <label className="block text-sm">
+            Compute constraint
+            <Input
+              data-testid="career-compute"
+              className="mt-1"
+              value={computeConstraint}
+              onChange={(event) => setComputeConstraint(event.target.value)}
+              placeholder="e.g. laptop only"
+            />
+          </label>
+        </div>
+        <label className="block text-sm">
+          Interests
+          <Textarea
+            data-testid="career-interests"
+            className="mt-1"
+            rows={2}
+            value={interests}
+            onChange={(event) => setInterests(event.target.value)}
+            placeholder="Topics you want your projects to explore…"
+          />
+        </label>
+        <div className="flex items-center gap-3">
+          <Button
+            data-testid="career-save"
+            disabled={saveCareer.isPending}
+            onClick={() => saveCareer.mutate()}
+          >
+            Save career profile
+          </Button>
+          {saveCareer.isSuccess && (
+            <p className="text-xs text-muted-foreground" data-testid="career-saved">
+              Saved.
+            </p>
+          )}
+          {saveCareer.isError && (
+            <p className="text-xs text-destructive" data-testid="career-save-error">
+              Saving failed — check the values.
+            </p>
+          )}
+        </div>
+      </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogHeader>

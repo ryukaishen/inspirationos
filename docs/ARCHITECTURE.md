@@ -58,7 +58,8 @@ inspiration-os/
 │   ├── app/
 │   │   ├── main.py, config.py    # pydantic-settings from env
 │   │   ├── api/                  # routers: auth, imports, conversations, items, clusters,
-│   │   │                         #   projects, artifacts, jobs, settings, export, health
+│   │   │                         #   projects, career, artifacts, jobs, settings, export, health
+│   │   │                         #   enqueue.py: shared jobs-row-then-enqueue helper
 │   │   ├── models/               # SQLAlchemy models (see DATA_MODEL.md)
 │   │   ├── schemas/              # Pydantic request/response models
 │   │   ├── services/
@@ -411,3 +412,67 @@ job-row-then-enqueue, payloads carry IDs/scalars only). The frontend
 - Scoring (M7) is hybrid: LLM sub-scores with rationales; final score computed
   at read time as `Σ(weight_i × subscore_i)` from user weights — instant
   re-rank.
+
+## Project generation, combination, and advisor (M7)
+
+Four jobs on the `ai` queue, all following the M6 conventions (own session,
+idempotency guard, per-unit progress commits, redacted errors) and triggered
+via `app/api/projects.py`. `app/api/enqueue.py::enqueue_job` is the shared
+jobs-row-then-enqueue helper (extracted from `clusters.py`, which now imports
+it) so `projects.py` doesn't duplicate the pattern.
+
+- **`run_generate_projects`** (`services/generation/projects.py`):
+  `POST /api/projects/generate` takes `cluster_ids`/`item_ids` (at least one
+  required; clusters expand to their member items via `ItemCluster`) and an
+  optional `count` (default/cap from `AppConfig.projects_default_count` /
+  `projects_max_count`). Context assembly reuses
+  `analysis.topics.build_llm_context_items` (the same
+  `is_eligible_for_generation` gate M6 uses) plus cluster label/description
+  summaries and the serialized career profile. One generation-tier
+  `generate_validated` call returns the whole batch (`ProjectIdeas`); every
+  idea's echoed `source_item_ids`/`source_cluster_ids` are verified against
+  the allowed sets **before any project row is written** — a single
+  ungrounded citation fails the whole batch (`GroundingError`, ids only). The
+  API layer also 404s unknown cluster/item ids and 400s a selection with no
+  eligible (real-text) items, so a bad request never reaches the worker.
+- **`run_combine_projects`** (`services/generation/combine.py`): 
+  `POST /api/projects/combine` takes exactly two existing `parent_project_ids`.
+  The provider sees only the two parents' generated fields (title, one-liner,
+  summary, domains, tech stack, skills) plus the career profile — no source
+  ids are echoed by the model. The child's `source` is the **union** of the
+  parents' stored `item_ids`/`cluster_ids`, and `parent_project_ids` links
+  both parents.
+- **`run_regenerate_project`** (`POST /api/projects/{id}/regenerate`):
+  re-runs generation grounded on the project's own stored `source` ids and
+  calls `apply_generated_fields` to replace only the generated fields (title,
+  summary, scores, tech stack, etc.). Status, milestones, parent links, and
+  existing advisor reviews are untouched — regeneration never resets
+  user-owned state.
+- **`run_advisor_review`** (`services/generation/advisor.py`,
+  `POST /api/projects/{id}/advisor`, kind `generate_artifact`): context is the
+  project's fields, a compact `{project_id, title, one_liner}` summary of the
+  rest of the library (for comparative judgment), and the career profile. The
+  validated `AdvisorReview` (commonality verdict + reasoning, comparative
+  strength, recruiter impact, prerequisites, week-by-week plan) is stored as
+  an `artifacts` row (`kind=advisor_review`): `payload` holds the structured
+  data the UI renders from, `content_md` is a markdown rendering (reused by
+  M8's export). `version = max(existing) + 1` per `(project_id, kind)` —
+  earlier versions are never overwritten, so regenerating the review always
+  keeps history.
+
+**Frontend** (`app/projects/`, `app/projects/[id]/`,
+`components/projects/`): the library page mirrors the clusters-page pattern
+(dependent queries: list → pick → detail; job trigger + poll via
+`refetchInterval`). Weight sliders (`components/ui/slider.tsx`, hand-rolled
+`<input type="range">` like `switch`/`checkbox` — no Radix) write to page
+state that a `useMemo` re-ranks through `lib/scoring.ts::rankProjects`; this
+is pure client-side math with zero API calls, verified by both a vitest test
+asserting no `fetch` call and an e2e test with a `page.on("request")`
+listener. "Save weights" is a separate, explicit action
+(`PATCH /api/settings/scoring`). The project-detail page composes
+`MilestoneEditor` (CRUD + up/down reorder, `PUT
+/api/projects/{id}/milestones/order` with server-side exact-permutation
+validation) and `AdvisorPanel` (version picker over
+`GET /api/projects/{id}/advisor`). Comparison (`CompareDialog`) is
+client-side only — a CSS-grid of aligned sub-score rows over 2-3 selected
+cards, no new endpoint.
