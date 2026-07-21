@@ -46,16 +46,18 @@ are simply recomputed by re-running the pipeline.
 
 ## Projects & artifacts
 
-All added by migration `0007` (M7), purely additive; `career_profile` (above)
-is seeded empty (id=1) by the same migration so `GET /api/career-profile`
-always has a row. `project_milestones`/`artifacts` FKs cascade on project
-deletion.
+`projects`/`project_milestones`/`artifacts` added by migration `0007` (M7);
+`artifacts.claims_flags` and `exports` added by migration `0008` (M8),
+purely additive. `career_profile` (above) is seeded empty (id=1) by the M7
+migration so `GET /api/career-profile` always has a row.
+`project_milestones`/`artifacts`/`exports` FKs cascade on project deletion.
 
 | Table | Columns (key) | Notes |
 | --- | --- | --- |
 | `projects` | id, title, one_liner, summary_md, domains (text[]), difficulty, duration_estimate, datasets (jsonb), tech_stack (jsonb), skills_demonstrated (jsonb), risks (jsonb), scores (jsonb — sub-scores 0–10 each with rationale string), status (`idea\|shortlisted\|planned\|in_progress\|completed\|archived`), source (jsonb: item_ids, cluster_ids, prompt_version, provider, model), parent_project_ids (int[]), timestamps | `parent_project_ids` links combined ideas to both parents. Source item/cluster IDs are verified to exist. |
 | `project_milestones` | id, project_id FK, title, description, sort_order, status (`todo\|doing\|done`), target_date | Roadmap tracking. |
-| `artifacts` | id, project_id FK, kind (`readme\|resume_bullets\|portfolio_desc\|interview_answer\|tech_questions\|advisor_review`), content_md, payload (jsonb, nullable), provider, model, prompt_version, version, created_at | Versioned — regeneration appends v2, v3… `payload` holds the structured AdvisorReview data. |
+| `artifacts` | id, project_id FK, kind (`readme\|resume_bullets\|portfolio_desc\|interview_answer\|tech_questions\|advisor_review`), content_md, payload (jsonb, nullable), claims_flags (jsonb list of strings, default `[]`), provider, model, prompt_version, version, created_at | Versioned — regeneration appends v2, v3… `payload` holds the structured AdvisorReview/ReadmePlan/etc. data. `claims_flags` (M8) holds regex-flagged suspicious performance-claim snippets from `services/generation/claims_guard.py::find_claims` — a flag never blocks generation, it's surfaced for the user's attention; always `[]` for `advisor_review` (a critique of the idea, not a report of measured results). |
+| `exports` | id, project_id FK nullable (`NULL` = full-library export), job_id FK nullable (`ON DELETE SET NULL`), format (`markdown\|json` enum `export_bundle_format`), storage_key (nullable until the job completes), size_bytes (nullable), error (nullable, redacted), created_at | M8. Row is inserted with `storage_key=NULL` in the same transaction as its `jobs` row, mirroring `imports`; the `export_bundle` job fills in `storage_key`/`size_bytes` (or `error`) so `GET /api/exports/{id}` reports readiness without cross-referencing the job. |
 
 ## Operations
 

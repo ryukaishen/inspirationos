@@ -1,7 +1,10 @@
 """Versioned per-project artifacts (table created in M7 for the Advisor).
 
 M7 writes `advisor_review` rows (structured data in `payload`, rendered
-markdown in `content_md`); M8 adds the other kinds using the same table.
+markdown in `content_md`); M8 adds the other kinds using the same table plus
+`claims_flags` (regex-flagged suspicious performance claims — see
+`services/generation/claims_guard.py`; empty for `advisor_review`, which
+critiques ideas rather than reporting measured results).
 Regeneration appends a new version — earlier versions are never overwritten.
 `content_md`/`payload` are generated from private text: never in logs.
 """
@@ -43,3 +46,6 @@ class Artifact(Base, CreatedAtMixin):
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(16), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    claims_flags: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )

@@ -476,3 +476,74 @@ validation) and `AdvisorPanel` (version picker over
 `GET /api/projects/{id}/advisor`). Comparison (`CompareDialog`) is
 client-side only — a CSS-grid of aligned sub-score rows over 2-3 selected
 cards, no new endpoint.
+
+## Career artifacts, claims guard, and export (M8)
+
+**Career artifacts:** five kinds (`readme`, `resume_bullets`, `portfolio_desc`,
+`interview_answer`, `tech_questions`) reuse the M7 `artifacts` table and
+Advisor's exact versioning shape, but through **one generic endpoint pair and
+one worker dispatcher** instead of five near-duplicate copies —
+`ArtifactKind`/`JobKind.generate_artifact` already carried every value M8
+needs since M7's migration, which pre-scaffolded this. `POST/GET
+/api/projects/{id}/artifacts/{kind}` (`kind` a `CareerArtifactKind` path enum
+that deliberately excludes `advisor_review`, which keeps its own `/advisor`
+endpoints unchanged) mirror the advisor trigger/list pair; a convenience `GET
+/api/projects/{id}/artifacts` returns the latest version of every generated
+kind for a summary view. `workers/jobs.py::run_generate_career_artifact(job_id,
+project_id, kind)` looks up a `CareerArtifactSpec` (task name, Pydantic
+schema, markdown renderer) from `services/generation/career_outputs.py`'s
+`CAREER_ARTIFACT_SPECS` dict keyed by `ArtifactKind`, then follows
+`run_advisor_review`'s exact shape (idempotency guard, `generate_validated`,
+`next_artifact_version`, redacted-error handling). Generation context is the
+project's **own stored fields** (title, summary, tech stack, scores, …) plus
+the career profile — not a re-fetch of raw source items, since the M7-stored
+project fields are already the grounded, verified representation.
+
+**Fabricated-claims guard:** `services/generation/claims_guard.py::find_claims`
+is a plain-regex heuristic (achievement-verb-plus-number patterns, e.g.
+"achieved 97%"; bare "N% <metric>" patterns; both skip a match preceded by a
+hedge word like "target"/"goal"/"estimate") run against each new artifact's
+rendered `content_md` right after generation. A match **never blocks**
+generation — findings are stored in `artifacts.claims_flags` (JSONB list,
+default `[]`) for the user's attention, surfaced in the UI as a warning badge
+and included in exports. Each new prompt (`services/ai/prompts/
+{readme,resume_bullets,portfolio_desc,interview_answer,tech_questions}_v1.txt`)
+also carries an explicit instruction never to state an unmeasured performance
+number as an already-achieved fact. Scoped to the five career-artifact kinds
+only — `advisor_review` critiques an idea, not measured results.
+
+**Export:** `POST /api/exports` (body: `{format: "markdown"|"json",
+project_id: int|null}`, `project_id: null` = full-library) inserts an
+`exports` row (`storage_key=NULL`) plus its `jobs` row in one transaction,
+then enqueues onto the `ai` queue — mirroring `imports.py`'s accept sequence
+so a request that never got queued never leaves a "ready" row behind.
+`workers/jobs.py::run_export_bundle(job_id, export_id)` assembles a
+`ProjectExport`/`LibraryExport` (`schemas/export.py` — the **published,
+schema-stable JSON contract**, `schema_version` field; validated round-trip
+via `ProjectExport.model_validate_json` rather than a separate `jsonschema`
+dependency) from `services/generation/export.py::build_project_export`/
+`build_library_export` (project fields + milestones + the latest version of
+each generated artifact, via `career_outputs.py::latest_artifacts_by_kind`),
+renders it to Markdown or JSON, and writes it through the `Storage`
+abstraction (`exports/{uuid}.{md,json}`), filling in `storage_key`/
+`size_bytes` (or `error`) on the `exports` row. `GET /api/exports/{id}`
+reports readiness from that row alone; `GET /api/exports/{id}/download`
+streams the file (`Content-Disposition: attachment`) through a small
+`_iter_and_close` generator — a raw file object handed to `StreamingResponse`
+is otherwise never explicitly closed, which leaked an open handle (visible as
+a Windows file-lock on cleanup) until this was added. A project with zero
+generated artifacts exports cleanly (`artifacts: []`).
+
+**Frontend** (`components/projects/career-artifacts-panel.tsx`,
+`export-panel.tsx`): the artifacts panel is a kind-tab selector over the
+same version-picker/regenerate shape as `AdvisorPanel`, rendering
+`content_md` directly (one generic renderer, not five bespoke per-kind
+layouts) plus a claims-warning banner when `claims_flags` is non-empty. The
+export panel's "Download" control is a plain same-origin `<a download>` to
+`/api/exports/{id}/download` — no blob/JS-download plumbing needed, since a
+normal anchor click already carries the session cookie. Both panels use the
+new `lib/use-job-polling.ts` hook, which extracts the
+mutation→jobId-state→`refetchInterval`-poll→callback block that M7 had
+inlined three times (`projects/[id]/page.tsx`, `AdvisorPanel`,
+`GenerateDialog`'s consumer) — justified now because M8 adds five more
+independent job-polling sites (one per artifact kind) plus export.

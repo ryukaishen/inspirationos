@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AdvisorPanel } from "@/components/projects/advisor-panel";
+import { CareerArtifactsPanel } from "@/components/projects/career-artifacts-panel";
+import { ExportPanel } from "@/components/projects/export-panel";
 import { MilestoneEditor } from "@/components/projects/milestone-editor";
 import { ScoreBars } from "@/components/projects/score-bars";
 import { Badge } from "@/components/ui/badge";
@@ -330,6 +332,8 @@ export default function ProjectDetailPage() {
 
           <MilestoneEditor projectId={projectId} milestones={project.milestones} />
           <AdvisorPanel projectId={projectId} />
+          <CareerArtifactsPanel projectId={projectId} />
+          <ExportPanel projectId={projectId} />
         </>
       )}
     </main>

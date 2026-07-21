@@ -24,16 +24,27 @@ from app.services.ai.schemas import (
     TASK_CLUSTER_LABEL,
     TASK_COMBINE_PROJECTS,
     TASK_GENERATE_PROJECTS,
+    TASK_INTERVIEW_ANSWER,
+    TASK_PORTFOLIO_DESC,
+    TASK_README,
+    TASK_RESUME_BULLETS,
+    TASK_TECH_QUESTIONS,
     TASK_TOPIC_EXTRACTION,
     AdvisorReview,
     ClusterLabel,
     CombinedProject,
     CommonalityVerdict,
+    InterviewAnswer,
     ItemTopics,
+    PortfolioDescription,
     ProjectIdea,
     ProjectIdeas,
     ProjectScores,
+    ReadmePlan,
+    ResumeBullets,
     SubScore,
+    TechQuestionEntry,
+    TechQuestions,
     TopicAssignmentEntry,
     TopicExtraction,
     WeekPlanEntry,
@@ -109,6 +120,16 @@ class MockProvider(LLMProvider):
             payload = self._combine_projects(context)
         elif task == TASK_ADVISOR_REVIEW:
             payload = self._advisor_review(context)
+        elif task == TASK_README:
+            payload = self._readme_plan(context)
+        elif task == TASK_RESUME_BULLETS:
+            payload = self._resume_bullets(context)
+        elif task == TASK_PORTFOLIO_DESC:
+            payload = self._portfolio_desc(context)
+        elif task == TASK_INTERVIEW_ANSWER:
+            payload = self._interview_answer(context)
+        elif task == TASK_TECH_QUESTIONS:
+            payload = self._tech_questions(context)
         else:
             raise ProviderError(f"mock provider has no generator for task {task!r}")
         text = payload.model_dump_json()
@@ -302,3 +323,106 @@ class MockProvider(LLMProvider):
                 for week in range(1, 5)
             ],
         )
+
+    def _project_tokens(self, project: dict[str, Any]) -> list[str]:
+        title = str(project.get("title", "the project"))
+        text = f"{title} {project.get('one_liner', '')} {project.get('summary_md', '')}"
+        return _top_tokens([text], 4) or ["project"]
+
+    def _readme_plan(self, context: dict[str, Any]) -> ReadmePlan:
+        project = context.get("project") or {}
+        title = str(project.get("title", "the project"))
+        tokens = self._project_tokens(project)
+        tech_stack = [str(entry) for entry in project.get("tech_stack", [])] or ["python"]
+        skills = [str(entry) for entry in project.get("skills_demonstrated", [])] or tokens
+        return ReadmePlan(
+            title=title[:200],
+            overview_md=(
+                f"## {title}\n\n{project.get('one_liner', '')}\n\nDeterministic mock overview "
+                f"grounded in this project's stated focus on {', '.join(tokens)}."
+            ),
+            features=[f"Supports {skill}" for skill in skills[:6]],
+            architecture_md=(
+                f"Planned around: {', '.join(tech_stack)}. Deterministic mock architecture "
+                f"description derived from the project's tech stack."
+            ),
+            setup_md=(
+                f"1. Clone the repository.\n2. Install dependencies for "
+                f"{', '.join(tech_stack)}.\n3. Follow the project plan in `summary_md`."
+            ),
+            roadmap_md=(
+                f"Estimated duration: {project.get('duration_estimate', 'unspecified')}. "
+                f"Known risks: "
+                f"{', '.join(str(risk) for risk in project.get('risks', [])) or 'none noted'}."
+            ),
+        )
+
+    def _resume_bullets(self, context: dict[str, Any]) -> ResumeBullets:
+        project = context.get("project") or {}
+        title = str(project.get("title", "the project"))
+        tokens = self._project_tokens(project)
+        tech_stack = [str(entry) for entry in project.get("tech_stack", [])] or tokens
+        skills = [str(entry) for entry in project.get("skills_demonstrated", [])] or tokens
+        duration = project.get("duration_estimate", "an estimated timeline")
+        bullets = [
+            f"Built {title}, a {project.get('difficulty', 'intermediate')}-level project "
+            f"applying {', '.join(tech_stack[:3])}.",
+            f"Designed and implemented functionality demonstrating {', '.join(skills[:3])}.",
+            f"Scoped and planned delivery across {duration}.",
+        ]
+        return ResumeBullets(bullets=bullets)
+
+    def _portfolio_desc(self, context: dict[str, Any]) -> PortfolioDescription:
+        project = context.get("project") or {}
+        title = str(project.get("title", "the project"))
+        tokens = self._project_tokens(project)
+        skills = [str(entry) for entry in project.get("skills_demonstrated", [])] or tokens
+        return PortfolioDescription(
+            headline=f"{title}: a {' '.join(tokens[:2])} project"[:150],
+            description_md=(
+                f"{project.get('one_liner', '')}\n\nDeterministic mock description grounded "
+                f"in this project's focus on {', '.join(tokens)}."
+            ),
+            highlights=[f"Demonstrates {skill}" for skill in skills[:6]],
+        )
+
+    def _interview_answer(self, context: dict[str, Any]) -> InterviewAnswer:
+        project = context.get("project") or {}
+        title = str(project.get("title", "the project"))
+        tokens = self._project_tokens(project)
+        return InterviewAnswer(
+            prompt="Tell me about a project you're proud of.",
+            answer_md=(
+                f"I built {title}, a project focused on {', '.join(tokens)}. "
+                f"{project.get('one_liner', '')} Deterministic mock answer describing the "
+                f"approach and reasoning behind the build."
+            ),
+            talking_points=[f"How {token} shaped the design" for token in tokens],
+        )
+
+    def _tech_questions(self, context: dict[str, Any]) -> TechQuestions:
+        project = context.get("project") or {}
+        title = str(project.get("title", "the project"))
+        tokens = self._project_tokens(project)
+        tech_stack = [str(entry) for entry in project.get("tech_stack", [])] or tokens
+        questions = [
+            TechQuestionEntry(
+                question=f"Why did you choose {tech} for {title}?",
+                answer_md=(
+                    f"Deterministic mock answer: {tech} fit the project's requirements "
+                    f"around {', '.join(tokens)}."
+                ),
+            )
+            for tech in tech_stack[:5]
+        ]
+        while len(questions) < 3:
+            questions.append(
+                TechQuestionEntry(
+                    question=f"What tradeoffs did you consider building {title}?",
+                    answer_md=(
+                        f"Deterministic mock answer discussing tradeoffs around "
+                        f"{', '.join(tokens)}."
+                    ),
+                )
+            )
+        return TechQuestions(questions=questions)

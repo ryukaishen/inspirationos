@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.career import router as career_router
 from app.api.clusters import router as clusters_router
 from app.api.conversations import router as conversations_router
+from app.api.export import router as export_router
 from app.api.health import router as health_router
 from app.api.imports import router as imports_router
 from app.api.items import router as items_router
@@ -20,3 +21,4 @@ api_router.include_router(clusters_router)
 api_router.include_router(projects_router)
 api_router.include_router(career_router)
 api_router.include_router(settings_router)
+api_router.include_router(export_router)

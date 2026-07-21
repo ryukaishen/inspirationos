@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { CompareDialog } from "@/components/projects/compare-dialog";
+import { ExportPanel } from "@/components/projects/export-panel";
 import { GenerateDialog } from "@/components/projects/generate-dialog";
 import { ProjectCard } from "@/components/projects/project-card";
 import { WeightSliders } from "@/components/projects/weight-sliders";
@@ -116,6 +117,8 @@ export default function ProjectsPage() {
           re-rankable.
         </p>
       </div>
+
+      <ExportPanel />
 
       <div className="flex flex-wrap items-center gap-3">
         <Button data-testid="generate-open" onClick={() => setGenerateOpen(true)}>

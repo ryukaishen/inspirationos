@@ -9,6 +9,7 @@
 import time
 import zipfile
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import numpy as np
 from sqlalchemy import delete, select, update
@@ -21,6 +22,7 @@ from app.models.app_settings import AppSettings
 from app.models.artifact import Artifact, ArtifactKind
 from app.models.conversation import Conversation
 from app.models.enrichment_attempt import EnrichmentAttempt, EnrichmentSource, EnrichmentStatus
+from app.models.export import Export, ExportBundleFormat
 from app.models.import_ import Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item
 from app.models.job import Job, JobStatus
@@ -62,7 +64,18 @@ from app.services.generation.advisor import (
     next_artifact_version,
     render_advisor_markdown,
 )
+from app.services.generation.career_outputs import (
+    CAREER_ARTIFACT_SPECS,
+    build_career_artifact_context,
+)
+from app.services.generation.claims_guard import find_claims
 from app.services.generation.combine import build_combine_context, combined_source_ids
+from app.services.generation.export import (
+    build_library_export,
+    build_project_export,
+    render_library_markdown,
+    render_project_markdown,
+)
 from app.services.generation.projects import (
     apply_generated_fields,
     build_generation_context,
@@ -1096,5 +1109,146 @@ def run_advisor_review(job_id: int, project_id: int) -> None:
             job.status = JobStatus.failed
             job.error = type(exc).__name__
             job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_generate_career_artifact(job_id: int, project_id: int, kind: str) -> None:
+    """Career artifacts (M8): README, resume bullets, portfolio description,
+    interview answer, or technical questions — one generation-tier call per
+    kind (dispatched by `kind` via `CAREER_ARTIFACT_SPECS` instead of one
+    function per kind), stored as a versioned artifact. The claims guard
+    flags (never blocks) suspicious performance-claim language in the
+    rendered markdown."""
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 2
+        session.commit()
+        try:
+            artifact_kind = ArtifactKind(kind)
+            spec = CAREER_ARTIFACT_SPECS[artifact_kind]
+            config = get_config()
+            project = session.get(Project, project_id)
+            if project is None:
+                raise ValueError(f"projects row {project_id} does not exist")
+
+            settings = session.get(AppSettings, 1)
+            provider = get_llm_provider(settings, config)
+            model = provider.resolve_model(ModelTier.generation)
+            tracker = JobTokenTracker(config.ai_job_token_budget)
+
+            result = generate_validated(
+                session,
+                provider,
+                task=spec.task,
+                context=build_career_artifact_context(
+                    project, load_career_profile_context(session)
+                ),
+                schema=spec.schema,
+                model=model,
+                config=config,
+                job_id=job.id,
+                token_tracker=tracker,
+            )
+            job.progress = 1
+            session.commit()
+
+            content_md = spec.render_markdown(result)
+            session.add(
+                Artifact(
+                    project_id=project.id,
+                    kind=artifact_kind,
+                    content_md=content_md,
+                    payload=result.model_dump(),
+                    claims_flags=find_claims(content_md),
+                    provider=provider.name,
+                    model=model,
+                    prompt_version=PROMPT_VERSION,
+                    version=next_artifact_version(session, project.id, artifact_kind),
+                )
+            )
+            job.progress = 2
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            session.commit()
+            raise
+
+
+def run_export_bundle(job_id: int, export_id: int) -> None:
+    """Markdown/JSON export (M8): renders a project bundle (or, when
+    `exports.project_id IS NULL`, the full library) and writes it through
+    Storage. Fills in the `exports` row's `storage_key`/`size_bytes` (or
+    `error`) so `GET /api/exports/{id}` reports readiness without needing to
+    cross-reference the job."""
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 1
+        session.commit()
+        export_row: Export | None = None
+        try:
+            export_row = session.get(Export, export_id)
+            if export_row is None:
+                raise ValueError(f"exports row {export_id} does not exist")
+
+            if export_row.project_id is not None:
+                project = session.get(Project, export_row.project_id)
+                if project is None:
+                    raise ValueError(f"projects row {export_row.project_id} does not exist")
+                project_export = build_project_export(session, project)
+                if export_row.format is ExportBundleFormat.markdown:
+                    content = render_project_markdown(project_export)
+                    extension = "md"
+                else:
+                    content = project_export.model_dump_json(indent=2)
+                    extension = "json"
+            else:
+                library_export = build_library_export(session)
+                if export_row.format is ExportBundleFormat.markdown:
+                    content = render_library_markdown(library_export)
+                    extension = "md"
+                else:
+                    content = library_export.model_dump_json(indent=2)
+                    extension = "json"
+
+            data = content.encode("utf-8")
+            storage = LocalStorage(get_config().data_dir)
+            spool_path = storage.spool_dir() / f"export-{uuid4().hex}.{extension}"
+            spool_path.write_bytes(data)
+            storage_key = f"exports/{uuid4().hex}.{extension}"
+            storage.save_file(storage_key, spool_path)
+
+            export_row.storage_key = storage_key
+            export_row.size_bytes = len(data)
+            job.progress = 1
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
+            if export_row is not None:
+                export_row.error = type(exc).__name__
             session.commit()
             raise

@@ -70,12 +70,29 @@ code and all future sessions; they take precedence over convenience.
 - `ai_requests` stores tokens, cost, latency, status — never content.
 - Optional Sentry (self-hosted-friendly) behind an env flag with scrubbing on.
 
+## Career artifacts and export (M8)
+
+- Career-artifact `content_md`/`payload` are generated text derived from a
+  project's own already-generated, already-grounded fields (title, summary,
+  tech stack, …) — never raw `share_text`/`adjacent_text`/`context_note`.
+- The fabricated-claims guard (`services/generation/claims_guard.py`) flags
+  suspicious performance-claim language for the user's attention; it never
+  blocks generation and never sends anything anywhere — it's a local regex
+  check over already-generated text.
+- Export files (Markdown/JSON bundles) are written through the existing
+  `Storage` abstraction under gitignored `var/data/exports/`, the same as
+  every other stored artifact — no new exposure surface, no new network
+  calls; the download endpoint streams straight from that storage key.
+
 ## Data deletion (three scopes, each with typed confirmation)
 
 1. **Raw import data** — deletes the stored ZIP, conversations, and messages.
    The user chooses whether derived items survive (source references nulled)
    or cascade-delete.
-2. **Project deletion** — project + milestones + artifacts.
+2. **Project deletion** — project + milestones + artifacts (+ exports, whose
+   FK cascades on project deletion; the underlying export file is not
+   auto-deleted from storage — cleanup of orphaned export files lands with
+   M9's complete-wipe filesystem check, same as other stored artifacts).
 3. **Complete wipe** — every table except `users`, plus all stored files; runs
    as a job and produces a verification report (row counts before/after,
    filesystem check).

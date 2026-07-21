@@ -23,6 +23,7 @@ from app.models.item import Item
 from app.models.job import JobKind
 from app.models.project import Project, ProjectMilestone, ProjectStatus
 from app.redis_client import get_redis
+from app.schemas.artifact import ArtifactRead, CareerArtifactKind
 from app.schemas.project import (
     AdvisorReviewRead,
     CombineRequest,
@@ -38,6 +39,7 @@ from app.schemas.project import (
     ProjectUpdateRequest,
 )
 from app.services.enrichment.policy import is_eligible_for_generation
+from app.services.generation.career_outputs import latest_artifacts_by_kind
 from app.services.generation.projects import resolve_source_item_ids
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -219,6 +221,52 @@ def list_advisor_reviews(project_id: int, db: DbSession) -> list[AdvisorReviewRe
         .order_by(Artifact.version.desc())
     )
     return [AdvisorReviewRead.model_validate(review) for review in reviews]
+
+
+# --- career artifacts (M8) ----------------------------------------------------
+
+
+@router.post(
+    "/{project_id}/artifacts/{kind}",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_career_artifact(
+    project_id: int, kind: CareerArtifactKind, db: DbSession, redis: RedisDep
+) -> GenerateAccepted:
+    _get_project_or_404(db, project_id)
+    job = enqueue_job(
+        db,
+        redis,
+        kind=JobKind.generate_artifact,
+        payload={"project_id": project_id, "kind": kind.value},
+        func_path="app.workers.jobs.run_generate_career_artifact",
+    )
+    return GenerateAccepted(job_id=job.id)
+
+
+@router.get("/{project_id}/artifacts/{kind}", response_model=list[ArtifactRead])
+def list_career_artifacts(
+    project_id: int, kind: CareerArtifactKind, db: DbSession
+) -> list[ArtifactRead]:
+    _get_project_or_404(db, project_id)
+    artifacts = db.scalars(
+        select(Artifact)
+        .where(Artifact.project_id == project_id, Artifact.kind == ArtifactKind(kind.value))
+        .order_by(Artifact.version.desc())
+    )
+    return [ArtifactRead.model_validate(artifact) for artifact in artifacts]
+
+
+@router.get("/{project_id}/artifacts", response_model=list[ArtifactRead])
+def list_all_artifacts(project_id: int, db: DbSession) -> list[ArtifactRead]:
+    """The latest version of every generated artifact kind (career kinds and
+    the advisor review), for a status/summary view."""
+    _get_project_or_404(db, project_id)
+    return [
+        ArtifactRead.model_validate(artifact)
+        for artifact in latest_artifacts_by_kind(db, project_id)
+    ]
 
 
 # --- roadmap milestones -------------------------------------------------------

@@ -253,18 +253,28 @@ cd e2e && npx playwright test specs/projects.spec.ts
 claims.
 
 Scope:
-- [ ] Artifact generation: README plan, resume bullets, portfolio description, interview explanation, likely technical questions.
-- [ ] Versioning + regenerate (v1 preserved).
-- [ ] Fabricated-claims guard: prompt rule + regex post-check that flags suspicious performance numbers for user attention.
-- [ ] Markdown export (project bundle + full library) and schema-stable JSON export, built by an export job through the Storage layer, downloadable.
+- [x] Artifact generation: README plan, resume bullets, portfolio description, interview explanation, likely technical questions.
+- [x] Versioning + regenerate (v1 preserved).
+- [x] Fabricated-claims guard: prompt rule + regex post-check that flags suspicious performance numbers for user attention.
+- [x] Markdown export (project bundle + full library) and schema-stable JSON export, built by an export job through the Storage layer, downloadable.
 
-Acceptance criteria:
-- [ ] Each artifact kind generates and displays with version history.
-- [ ] Regeneration creates v2 and keeps v1.
-- [ ] Claims guard flags a seeded "achieved 97% accuracy" mock output (test).
-- [ ] Exported Markdown renders correctly; JSON validates against its published schema.
-- [ ] A project with no artifacts exports cleanly.
+Acceptance criteria (verified locally against the compose stack 2026-07-20 —
+backend/frontend suites green; the Playwright criterion below is blocked, see
+note):
+- [x] Each artifact kind generates and displays with version history.
+- [x] Regeneration creates v2 and keeps v1.
+- [x] Claims guard flags a seeded "achieved 97% accuracy" mock output (test).
+- [x] Exported Markdown renders correctly; JSON validates against its published schema.
+- [x] A project with no artifacts exports cleanly.
 - [ ] Playwright: generate README → export → file-content assertions.
+  `specs/artifacts-export.spec.ts` is written (upload → extract → cluster →
+  generate → generate README → export Markdown → export JSON → file-content
+  assertions) but could not be exercised locally: the dev compose stack's
+  `/import/[id]/conversations` route currently 404s in the frontend
+  container (Next 16 / Turbopack dev server), reproduced identically by
+  re-running the untouched, pre-existing `clusters.spec.ts` (M6) — a
+  pre-existing environment defect, not caused by this milestone's diff.
+  Needs a CI run (or a from-scratch dev-stack rebuild) to close out.
 
 Test commands:
 ```bash

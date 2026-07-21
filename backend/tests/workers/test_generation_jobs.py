@@ -19,22 +19,29 @@ import respx
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
+from app.config import get_config
 from app.models.ai_request import AiRequest, AiRequestStatus
 from app.models.analysis import Cluster, ClusterRun, ClusterRunStatus, ItemCluster
 from app.models.app_settings import AppSettings
 from app.models.artifact import Artifact, ArtifactKind
+from app.models.export import Export, ExportBundleFormat
 from app.models.item import Item, ItemStatus, ItemType
 from app.models.job import Job, JobKind, JobStatus
 from app.models.project import MilestoneStatus, Project, ProjectMilestone, ProjectStatus
+from app.schemas.export import LibraryExport, ProjectExport
 from app.services.ai.budget import BudgetExceededError
 from app.services.ai.mock_provider import MockProvider
 from app.services.ai.provider import RawGeneration
+from app.services.ai.schemas import TASK_README
 from app.services.analysis.topics import GroundingError
 from app.services.generation.projects import NoEligibleItemsError
 from app.services.generation.scoring import SCORE_DIMENSIONS
+from app.services.storage.local import LocalStorage
 from app.workers.jobs import (
     run_advisor_review,
     run_combine_projects,
+    run_export_bundle,
+    run_generate_career_artifact,
     run_generate_projects,
     run_regenerate_project,
 )
@@ -195,6 +202,31 @@ def make_project(pg_engine: Engine) -> Generator[Callable[..., int], None, None]
     yield _make
     with Session(pg_engine) as session:
         session.execute(delete(Project).where(Project.id.in_(created)))
+        session.commit()
+
+
+@pytest.fixture
+def make_export(pg_engine: Engine) -> Generator[Callable[..., int], None, None]:
+    created: list[int] = []
+
+    def _make(**overrides: Any) -> int:
+        fields: dict[str, Any] = {"format": ExportBundleFormat.markdown, "project_id": None}
+        fields.update(overrides)
+        with Session(pg_engine, expire_on_commit=False) as session:
+            export_row = Export(**fields)
+            session.add(export_row)
+            session.commit()
+            created.append(export_row.id)
+            return export_row.id
+
+    yield _make
+    with Session(pg_engine) as session:
+        rows = list(session.scalars(select(Export).where(Export.id.in_(created))))
+        storage = LocalStorage(get_config().data_dir)
+        for row in rows:
+            if row.storage_key is not None:
+                storage.delete(row.storage_key)
+        session.execute(delete(Export).where(Export.id.in_(created)))
         session.commit()
 
 
@@ -618,3 +650,256 @@ def test_regenerate_replaces_generated_fields_and_preserves_user_state(
         assert kept is not None
         assert kept.title == "Week 1 setup"
     assert _job(pg_engine, job_id).status is JobStatus.succeeded
+
+
+# --- career artifacts (M8) -----------------------------------------------------
+
+
+class ClaimInjectingProvider(MockProvider):
+    """MockProvider that injects an unverified performance claim into the
+    README overview, so the claims guard has something real to flag."""
+
+    def generate_raw(self, **kwargs: Any) -> RawGeneration:
+        raw = super().generate_raw(**kwargs)
+        if kwargs["task"] != TASK_README:
+            return raw
+        data = json.loads(raw.text)
+        data["overview_md"] += " We achieved 97% accuracy in testing."
+        return replace(raw, text=json.dumps(data))
+
+
+def _career_artifacts(pg_engine: Engine, project_id: int, kind: ArtifactKind) -> list[Artifact]:
+    with Session(pg_engine) as session:
+        return list(
+            session.scalars(
+                select(Artifact)
+                .where(Artifact.project_id == project_id, Artifact.kind == kind)
+                .order_by(Artifact.version)
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["readme", "resume_bullets", "portfolio_desc", "interview_answer", "tech_questions"],
+)
+def test_career_artifact_generates_for_every_kind(
+    kind: str,
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+) -> None:
+    project_id = make_project()
+
+    with respx.mock:
+        run_generate_career_artifact(
+            make_job(JobKind.generate_artifact), project_id=project_id, kind=kind
+        )
+
+    [artifact] = _career_artifacts(pg_engine, project_id, ArtifactKind(kind))
+    assert artifact.version == 1
+    assert artifact.content_md.strip()
+    assert artifact.payload
+    assert artifact.provider == "mock"
+    assert artifact.claims_flags == []
+
+
+def test_career_artifact_is_versioned(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+) -> None:
+    project_id = make_project()
+
+    with respx.mock:
+        run_generate_career_artifact(
+            make_job(JobKind.generate_artifact), project_id=project_id, kind="readme"
+        )
+    [first] = _career_artifacts(pg_engine, project_id, ArtifactKind.readme)
+    first_id = first.id
+
+    with respx.mock:
+        run_generate_career_artifact(
+            make_job(JobKind.generate_artifact), project_id=project_id, kind="readme"
+        )
+    versions = _career_artifacts(pg_engine, project_id, ArtifactKind.readme)
+    assert [artifact.version for artifact in versions] == [1, 2]
+    assert versions[0].id == first_id
+
+
+def test_career_artifact_claims_guard_flags_injected_claim(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.workers.jobs.get_llm_provider", lambda settings, config: ClaimInjectingProvider()
+    )
+    project_id = make_project()
+
+    with respx.mock:
+        run_generate_career_artifact(
+            make_job(JobKind.generate_artifact), project_id=project_id, kind="readme"
+        )
+
+    [artifact] = _career_artifacts(pg_engine, project_id, ArtifactKind.readme)
+    assert artifact.claims_flags
+    assert any("97%" in flag for flag in artifact.claims_flags)
+    assert "achieved 97%" in " ".join(artifact.claims_flags)
+
+
+def test_career_artifact_for_missing_project_fails_cleanly(
+    pg_engine: Engine,
+    make_job: Callable[[JobKind], int],
+) -> None:
+    job_id = make_job(JobKind.generate_artifact)
+    with respx.mock, pytest.raises(ValueError):
+        run_generate_career_artifact(job_id, project_id=999_999_999, kind="readme")
+    job = _job(pg_engine, job_id)
+    assert job.status is JobStatus.failed
+    assert job.error == "ValueError"
+
+
+def test_finished_career_artifact_job_is_a_noop(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+) -> None:
+    project_id = make_project()
+    job_id = make_job(JobKind.generate_artifact)
+    with Session(pg_engine) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        job.status = JobStatus.succeeded
+        session.commit()
+
+    with respx.mock:
+        run_generate_career_artifact(job_id, project_id=project_id, kind="readme")
+
+    assert _career_artifacts(pg_engine, project_id, ArtifactKind.readme) == []
+
+
+# --- export bundle (M8) --------------------------------------------------------
+
+
+def _read_export(pg_engine: Engine, export_id: int) -> Export:
+    with Session(pg_engine) as session:
+        export_row = session.get(Export, export_id)
+        assert export_row is not None
+        session.expunge(export_row)
+        return export_row
+
+
+def _read_stored_text(export_row: Export) -> str:
+    assert export_row.storage_key is not None
+    storage = LocalStorage(get_config().data_dir)
+    with storage.open(export_row.storage_key) as handle:
+        return handle.read().decode("utf-8")
+
+
+def test_export_bundle_project_markdown_writes_file_and_updates_row(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+    make_export: Callable[..., int],
+) -> None:
+    project_id = make_project(title="Exportable Widget")
+    export_id = make_export(format=ExportBundleFormat.markdown, project_id=project_id)
+    job_id = make_job(JobKind.export_bundle)
+
+    with respx.mock:
+        run_export_bundle(job_id, export_id=export_id)
+
+    export_row = _read_export(pg_engine, export_id)
+    assert export_row.storage_key is not None
+    assert export_row.size_bytes and export_row.size_bytes > 0
+    assert export_row.error is None
+    assert "Exportable Widget" in _read_stored_text(export_row)
+    assert _job(pg_engine, job_id).status is JobStatus.succeeded
+
+
+def test_export_bundle_project_json_validates_against_published_schema(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+    make_export: Callable[..., int],
+) -> None:
+    project_id = make_project()
+    export_id = make_export(format=ExportBundleFormat.json, project_id=project_id)
+
+    with respx.mock:
+        run_export_bundle(make_job(JobKind.export_bundle), export_id=export_id)
+
+    export_row = _read_export(pg_engine, export_id)
+    parsed = ProjectExport.model_validate_json(_read_stored_text(export_row))
+    assert parsed.id == project_id
+
+
+def test_export_bundle_project_with_no_artifacts_exports_cleanly(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+    make_export: Callable[..., int],
+) -> None:
+    project_id = make_project()
+    export_id = make_export(format=ExportBundleFormat.json, project_id=project_id)
+
+    with respx.mock:
+        run_export_bundle(make_job(JobKind.export_bundle), export_id=export_id)
+
+    export_row = _read_export(pg_engine, export_id)
+    parsed = ProjectExport.model_validate_json(_read_stored_text(export_row))
+    assert parsed.artifacts == []
+    assert parsed.milestones == []
+
+
+def test_export_bundle_library_scope_includes_all_projects(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+    make_export: Callable[..., int],
+) -> None:
+    project_id = make_project(title="Library Member")
+    export_id = make_export(format=ExportBundleFormat.json, project_id=None)
+
+    with respx.mock:
+        run_export_bundle(make_job(JobKind.export_bundle), export_id=export_id)
+
+    export_row = _read_export(pg_engine, export_id)
+    assert export_row.project_id is None
+    parsed = LibraryExport.model_validate_json(_read_stored_text(export_row))
+    assert any(project.id == project_id for project in parsed.projects)
+
+
+def test_export_bundle_missing_row_fails_cleanly(
+    pg_engine: Engine,
+    make_job: Callable[[JobKind], int],
+) -> None:
+    job_id = make_job(JobKind.export_bundle)
+    with respx.mock, pytest.raises(ValueError):
+        run_export_bundle(job_id, export_id=999_999_999)
+    job = _job(pg_engine, job_id)
+    assert job.status is JobStatus.failed
+    assert job.error == "ValueError"
+
+
+def test_finished_export_job_is_a_noop(
+    pg_engine: Engine,
+    make_project: Callable[..., int],
+    make_job: Callable[[JobKind], int],
+    make_export: Callable[..., int],
+) -> None:
+    project_id = make_project()
+    export_id = make_export(format=ExportBundleFormat.markdown, project_id=project_id)
+    job_id = make_job(JobKind.export_bundle)
+    with Session(pg_engine) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        job.status = JobStatus.succeeded
+        session.commit()
+
+    with respx.mock:
+        run_export_bundle(job_id, export_id=export_id)
+
+    assert _read_export(pg_engine, export_id).storage_key is None

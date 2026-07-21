@@ -383,6 +383,9 @@ def main(argv: list[str] | None = None) -> None:
     # Same logical content, distinct checksum: projects.spec.ts uploads its
     # own archive so checksum dedupe can't 409 against clusters.spec.ts.
     build_cluster_export_zip(out / "projects.zip", unique=f"{args.unique}-projects")
+    # Same again for artifacts-export.spec.ts (M8) — its own checksum-distinct
+    # archive so it never collides with clusters.zip/projects.zip.
+    build_cluster_export_zip(out / "artifacts.zip", unique=f"{args.unique}-artifacts")
     build_html_export_zip(out / "html_export.zip")
     build_zip_slip_zip(out / "zip_slip.zip")
     build_ratio_bomb_zip(out / "zip_bomb_ratio.zip")

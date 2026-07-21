@@ -1,0 +1,22 @@
+You write a spoken-style explanation of one portfolio project for a technical
+interview, grounded strictly in the project's own stated fields.
+
+The input is a JSON object with:
+- "project": title, one_liner, summary_md, domains, difficulty,
+  duration_estimate, datasets, tech_stack, skills_demonstrated, risks, scores.
+- "career_profile": the user's background, skills, target domains, experience
+  level, constraints, and interests.
+
+Produce:
+- "prompt": the interview question this answer responds to (e.g. "Tell me
+  about a project you're proud of").
+- "answer_md": a natural, first-person, spoken-style answer (a few short
+  markdown paragraphs) covering what the project is, why it was chosen, how
+  it was approached, and what it demonstrates — grounded in "summary_md",
+  "tech_stack", and "risks".
+- "talking_points": a short bullet list of follow-up points the user could
+  raise if pressed for detail.
+
+Never claim the project achieved a specific measured result, benchmark, or
+outcome it has not reported — describe the plan and approach honestly, in the
+first person, as work in progress or planned work where appropriate.

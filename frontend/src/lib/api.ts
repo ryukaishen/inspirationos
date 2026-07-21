@@ -861,6 +861,134 @@ export async function reorderMilestones(
   return (await response.json()) as MilestoneRead[];
 }
 
+// --- career artifacts (M8) -----------------------------------------------------
+
+export type CareerArtifactKind =
+  | "readme"
+  | "resume_bullets"
+  | "portfolio_desc"
+  | "interview_answer"
+  | "tech_questions";
+
+export const CAREER_ARTIFACT_KINDS: readonly CareerArtifactKind[] = [
+  "readme",
+  "resume_bullets",
+  "portfolio_desc",
+  "interview_answer",
+  "tech_questions",
+];
+
+export const CAREER_ARTIFACT_LABELS: Record<CareerArtifactKind, string> = {
+  readme: "README",
+  resume_bullets: "Resume bullets",
+  portfolio_desc: "Portfolio description",
+  interview_answer: "Interview answer",
+  tech_questions: "Technical questions",
+};
+
+export interface ArtifactRead {
+  id: number;
+  project_id: number;
+  kind: CareerArtifactKind | "advisor_review";
+  version: number;
+  content_md: string;
+  payload: Record<string, unknown> | null;
+  claims_flags: string[];
+  provider: string;
+  model: string;
+  prompt_version: string;
+  created_at: string;
+}
+
+export async function requestCareerArtifact(
+  projectId: number,
+  kind: CareerArtifactKind,
+): Promise<GenerateAccepted> {
+  const response = await fetch(`/api/projects/${projectId}/artifacts/${kind}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `artifact request failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as GenerateAccepted;
+}
+
+export async function listCareerArtifacts(
+  projectId: number,
+  kind: CareerArtifactKind,
+): Promise<ArtifactRead[]> {
+  const response = await fetch(`/api/projects/${projectId}/artifacts/${kind}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `artifact versions fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as ArtifactRead[];
+}
+
+export async function listAllArtifacts(projectId: number): Promise<ArtifactRead[]> {
+  const response = await fetch(`/api/projects/${projectId}/artifacts`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `artifact summary fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as ArtifactRead[];
+}
+
+// --- export (M8) ---------------------------------------------------------------
+
+export type ExportBundleFormat = "markdown" | "json";
+
+export interface ExportAccepted {
+  export_id: number;
+  job_id: number;
+}
+
+export interface ExportRead {
+  id: number;
+  project_id: number | null;
+  format: ExportBundleFormat;
+  ready: boolean;
+  size_bytes: number | null;
+  error: string | null;
+  created_at: string;
+}
+
+export async function requestExport(
+  format: ExportBundleFormat,
+  projectId?: number,
+): Promise<ExportAccepted> {
+  const response = await fetch("/api/exports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ format, project_id: projectId ?? null }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `export request failed with status ${response.status}`);
+  }
+  return (await response.json()) as ExportAccepted;
+}
+
+export async function getExport(exportId: number): Promise<ExportRead> {
+  const response = await fetch(`/api/exports/${exportId}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `export fetch failed with status ${response.status}`);
+  }
+  return (await response.json()) as ExportRead;
+}
+
+export function exportDownloadUrl(exportId: number): string {
+  return `/api/exports/${exportId}/download`;
+}
+
 // --- career profile (M7) -----------------------------------------------------
 
 export interface CareerProfileRead {

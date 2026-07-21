@@ -1,10 +1,10 @@
 """Shared Pydantic task schemas every LLM provider must validate against.
 
 M6 tasks (topic extraction, cluster labeling) + M7 tasks (project generation,
-combination, advisor review); M8 adds the career-artifact tasks. Providers
-never define their own output shapes — the same schema drives the Anthropic
-tool input_schema, the OpenAI json_schema response format, and the Mock
-provider's constructed output.
+combination, advisor review) + M8 tasks (career artifacts). Providers never
+define their own output shapes — the same schema drives the Anthropic tool
+input_schema, the OpenAI json_schema response format, and the Mock provider's
+constructed output.
 """
 
 from typing import Literal
@@ -16,6 +16,11 @@ TASK_CLUSTER_LABEL = "cluster_label"
 TASK_GENERATE_PROJECTS = "generate_projects"
 TASK_COMBINE_PROJECTS = "combine_projects"
 TASK_ADVISOR_REVIEW = "advisor_review"
+TASK_README = "readme"
+TASK_RESUME_BULLETS = "resume_bullets"
+TASK_PORTFOLIO_DESC = "portfolio_desc"
+TASK_INTERVIEW_ANSWER = "interview_answer"
+TASK_TECH_QUESTIONS = "tech_questions"
 
 
 class TopicAssignmentEntry(BaseModel):
@@ -110,3 +115,48 @@ class AdvisorReview(BaseModel):
     recruiter_impact: str = Field(min_length=1)
     prerequisites: list[str] = Field(min_length=1, max_length=15)
     week_by_week: list[WeekPlanEntry] = Field(min_length=1, max_length=52)
+
+
+class ReadmePlan(BaseModel):
+    """A project README's planned structure (M8)."""
+
+    title: str = Field(min_length=1, max_length=200)
+    overview_md: str = Field(min_length=1)
+    features: list[str] = Field(min_length=1, max_length=10)
+    architecture_md: str = Field(min_length=1)
+    setup_md: str = Field(min_length=1)
+    roadmap_md: str = Field(min_length=1)
+
+
+class ResumeBullets(BaseModel):
+    """Resume-ready bullet points for one project (M8)."""
+
+    bullets: list[str] = Field(min_length=3, max_length=6)
+
+
+class PortfolioDescription(BaseModel):
+    """A short portfolio-site blurb for one project (M8)."""
+
+    headline: str = Field(min_length=1, max_length=150)
+    description_md: str = Field(min_length=1)
+    highlights: list[str] = Field(min_length=1, max_length=6)
+
+
+class InterviewAnswer(BaseModel):
+    """A spoken-style explanation of the project for interviews (M8)."""
+
+    prompt: str = Field(min_length=1, max_length=200)
+    answer_md: str = Field(min_length=1)
+    talking_points: list[str] = Field(min_length=1, max_length=8)
+
+
+class TechQuestionEntry(BaseModel):
+    question: str = Field(min_length=1, max_length=300)
+    answer_md: str = Field(min_length=1)
+
+
+class TechQuestions(BaseModel):
+    """Likely technical interview questions about the project, with model
+    answers (M8)."""
+
+    questions: list[TechQuestionEntry] = Field(min_length=3, max_length=8)
