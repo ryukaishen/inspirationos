@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { ConfirmDeleteDialog } from "@/components/deletion/confirm-delete-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,8 +17,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   AI_PROVIDERS,
+  ApiError,
+  FINISHED_JOB_STATUSES,
   getCareerProfile,
+  getCurrentUser,
+  getJob,
   getSettings,
+  requestWipe,
   updateAiSettings,
   updateCareerProfile,
   updateEnrichmentSettings,
@@ -47,6 +53,8 @@ export default function SettingsPage() {
   const [computeConstraint, setComputeConstraint] = useState("");
   const [interests, setInterests] = useState("");
   const [careerFormReady, setCareerFormReady] = useState(false);
+  const [wipeOpen, setWipeOpen] = useState(false);
+  const [wipeJobId, setWipeJobId] = useState<number | null>(null);
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ["settings"],
@@ -55,6 +63,10 @@ export default function SettingsPage() {
   const { data: careerProfile } = useQuery({
     queryKey: ["career-profile"],
     queryFn: getCareerProfile,
+  });
+  const { data: currentUser } = useQuery({
+    queryKey: ["current-user"],
+    queryFn: getCurrentUser,
   });
 
   // Initialize the AI form once from the loaded settings (render-time state
@@ -117,6 +129,28 @@ export default function SettingsPage() {
       await queryClient.invalidateQueries({ queryKey: ["career-profile"] });
     },
   });
+
+  const wipe = useMutation({
+    mutationFn: (confirmEmail: string) => requestWipe(confirmEmail),
+    // Close the dialog once the job is accepted; progress/report render on
+    // the page itself, not inside the (now-closed) confirmation dialog.
+    onSuccess: (accepted) => {
+      setWipeOpen(false);
+      setWipeJobId(accepted.job_id);
+    },
+  });
+
+  const wipeJob = useQuery({
+    queryKey: ["job", "wipe", wipeJobId],
+    queryFn: () => getJob(wipeJobId as number),
+    enabled: wipeJobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status !== undefined && FINISHED_JOB_STATUSES.includes(status) ? false : 1500;
+    },
+  });
+  const wipeSucceeded = wipeJob.data?.status === "succeeded";
+  const wipeReport = wipeSucceeded ? (wipeJob.data?.payload.report as Record<string, unknown>) : null;
 
   function handleToggle(next: boolean) {
     if (next) {
@@ -353,6 +387,62 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      <div
+        className="space-y-3 rounded-lg border border-destructive/40 bg-card p-4"
+        data-testid="danger-zone"
+      >
+        <div>
+          <p className="font-medium text-destructive">Danger zone</p>
+          <p className="text-sm text-muted-foreground">
+            Permanently deletes every table except your account, and every stored file. Runs as a
+            background job and produces a verification report.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="destructive"
+          data-testid="wipe-open"
+          disabled={!currentUser}
+          onClick={() => setWipeOpen(true)}
+        >
+          Delete all application data
+        </Button>
+        {wipeJobId !== null && !wipeSucceeded && (
+          <p className="text-xs text-muted-foreground" data-testid="wipe-in-progress">
+            Wipe job {wipeJob.data?.status ?? "queued"}…
+          </p>
+        )}
+        {wipeReport && (
+          <pre
+            className="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs"
+            data-testid="wipe-report"
+          >
+            {JSON.stringify(wipeReport, null, 2)}
+          </pre>
+        )}
+      </div>
+
+      {currentUser && (
+        <ConfirmDeleteDialog
+          open={wipeOpen}
+          onOpenChange={setWipeOpen}
+          title="Delete all application data?"
+          description="Every import, item, project, artifact, and stored file is removed permanently. Only your account survives."
+          confirmValue={currentUser.email}
+          confirmLabel="Wipe everything"
+          onConfirm={() => wipe.mutate(currentUser.email)}
+          isPending={wipe.isPending}
+          error={
+            wipe.error instanceof ApiError
+              ? wipe.error.message
+              : wipe.isError
+                ? "Wipe request failed."
+                : null
+          }
+          testIdPrefix="wipe"
+        />
+      )}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogHeader>

@@ -51,15 +51,31 @@ code and all future sessions; they take precedence over convenience.
 
 ## Authentication & sessions
 
-- Single user; password hashed with **argon2id**; `create-user` CLI seeds the
-  account (no open registration).
-- Server-side sessions in Redis (revocable), delivered via httpOnly, Secure,
-  SameSite=Strict cookie. Frontend and API share an origin (Next.js proxy), so
-  no CORS surface.
-- Login rate limiting via Redis counters. CSRF posture: SameSite=Strict plus a
-  required custom header on mutating requests.
-- Every non-auth API route requires a session; this is verified by a test that
-  sweeps all registered routes (M9).
+- Single user; password hashed with **argon2id**
+  (`services/auth/passwords.py`); `python -m app.cli create-user` seeds/
+  updates the account (no open registration route anywhere).
+- Server-side sessions in Redis (`services/auth/sessions.py`), revocable
+  immediately on logout, delivered via an httpOnly, Secure, SameSite=Strict
+  `session_id` cookie whose value is `{opaque token}.{hmac}` — the HMAC (keyed
+  by `SECRET_KEY`) is tamper-evidence only; the actual capability is the
+  Redis-side lookup, so revocation doesn't depend on the signature. Frontend
+  and API share an origin (Next.js proxy), so no CORS surface.
+- Login rate limiting via a Redis fixed-window counter keyed by client IP
+  (`services/auth/rate_limit.py`). CSRF posture: SameSite=Strict plus a
+  required `X-Requested-With: XMLHttpRequest` header on every mutating
+  request (`app/api/deps.py::require_csrf_header`), which the frontend
+  attaches via `lib/api.ts`'s shared `CSRF_HEADERS`.
+- Every non-auth API route requires a session (`app/api/__init__.py`'s
+  `protected_router`); `tests/api/test_route_gating.py` sweeps every route
+  registered in `app.openapi()["paths"]` and asserts 401 for all but
+  `GET /api/health` and `POST /api/auth/login|logout`.
+- The frontend's `src/proxy.ts` redirect-to-`/login` guard is a UX
+  convenience only, driven by cookie *presence* — it does not (and cannot)
+  verify the session is still valid server-side. The backend dependency
+  above is the actual boundary; a stale-but-present cookie after a session
+  is revoked elsewhere (e.g. Redis flushed) results in 401s from the API
+  rather than an automatic client-side redirect, a known minor UX gap, not
+  a security one.
 
 ## Logging & observability
 
@@ -86,23 +102,42 @@ code and all future sessions; they take precedence over convenience.
 
 ## Data deletion (three scopes, each with typed confirmation)
 
-1. **Raw import data** — deletes the stored ZIP, conversations, and messages.
-   The user chooses whether derived items survive (source references nulled)
-   or cascade-delete.
-2. **Project deletion** — project + milestones + artifacts (+ exports, whose
-   FK cascades on project deletion; the underlying export file is not
-   auto-deleted from storage — cleanup of orphaned export files lands with
-   M9's complete-wipe filesystem check, same as other stored artifacts).
-3. **Complete wipe** — every table except `users`, plus all stored files; runs
-   as a job and produces a verification report (row counts before/after,
-   filesystem check).
+`services/privacy/deletion.py`. Each scope requires retyping an exact value
+server-side-checked before anything is deleted — not just a click-through.
+
+1. **Raw import data** (`POST /api/imports/{id}/delete`, retype the
+   filename) — deletes the stored ZIP, conversations, and messages. The user
+   chooses whether derived items survive (source references nulled) or
+   cascade-delete; cascading also clears the item's `enrichment_attempts`
+   and any `duplicate_groups` it touches, which have no `ON DELETE CASCADE`
+   of their own.
+2. **Project deletion** (`DELETE /api/projects/{id}`, retype the project
+   title) — project + milestones + artifacts (+ exports, whose FK cascades
+   on project deletion; the underlying export file is not auto-deleted from
+   storage — cleanup of orphaned export files lands with the complete
+   wipe's filesystem check, same as other stored artifacts).
+3. **Complete wipe** (`POST /api/privacy/wipe`, retype the account email) —
+   every table except `users`, plus all stored files; runs as the
+   `delete_data` job and produces a verification report (row counts
+   before/after per table, files-removed/files-remaining) written into the
+   job's own `payload`, readable via the existing `GET /api/jobs/{id}`
+   polling endpoint. The `settings`/`career_profile` singleton rows are
+   reseeded with defaults so the app stays usable immediately after. Also
+   reachable without Redis/a worker via `python -m app.cli wipe-data`, for
+   recovering a stuck deployment.
 
 ## Transport & production posture
 
-- Prod: only Caddy is exposed (443/80→redirect); backend, worker, Postgres,
-  and Redis live on an internal Docker network. Automatic TLS via Let's
-  Encrypt.
+- Prod (`docker-compose.prod.yml`, standalone — see ARCHITECTURE.md for why
+  it isn't an overlay on the dev file): only Caddy publishes ports
+  (443/80→redirect); backend, worker, Postgres, and Redis have no `ports:`
+  entry, so they're reachable from other containers on the compose network
+  but never from outside the host. Automatic TLS via Let's Encrypt
+  (`Caddyfile`).
 - Secrets are environment variables on the VPS — never in git, images, or
   build args. `.env.example` documents every variable with placeholders.
-- Backups (nightly `pg_dump` + `var/data` archive) are private data too:
-  stored with restricted permissions, covered by the same deletion promises.
+- Backups (`backend/scripts/backup.sh`: nightly `pg_dump` + `var/data`
+  tar, both gzipped) are private data too: stored with restricted
+  permissions, covered by the same deletion promises. `restore.sh` restores
+  into an isolated scratch compose project, never the live stack, so a
+  restore-drill rehearsal can never overwrite real data.

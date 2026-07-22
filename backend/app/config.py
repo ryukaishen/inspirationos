@@ -17,6 +17,20 @@ class AppConfig(BaseSettings):
     secret_key: str = "dev-only-secret-change-me"
     log_level: str = "INFO"
 
+    # Auth & sessions (M9). Sessions live in Redis, keyed by an HMAC-signed
+    # opaque token (see services/auth/sessions.py) — secret_key signs the
+    # cookie, not the Redis-side capability, so revocation stays immediate.
+    session_ttl_seconds: int = 60 * 60 * 24 * 14
+    login_rate_limit_attempts: int = 5
+    login_rate_limit_window_seconds: int = 300
+    # Real browsers (and Playwright/Chromium) treat http://localhost as a
+    # secure context and happily store/resend a Secure cookie there, so dev
+    # and prod both want this True. httpx's TestClient talks plain
+    # http://testserver through Python's stdlib http.cookiejar, which has no
+    # such exception and silently drops Secure cookies — pytest's conftest
+    # sets SESSION_COOKIE_SECURE=false for that process only.
+    session_cookie_secure: bool = True
+
     database_url: str = "postgresql+psycopg://inspiration:inspiration@localhost:5432/inspiration"
     redis_url: str = "redis://localhost:6379/0"
 

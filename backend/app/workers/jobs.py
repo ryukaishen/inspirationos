@@ -97,6 +97,7 @@ from app.services.ingest.instagram.parser import (
     to_datetime,
 )
 from app.services.ingest.instagram.selfdm import detect_owner, is_self_dm_candidate
+from app.services.privacy.deletion import wipe_everything
 from app.services.storage.local import LocalStorage
 
 
@@ -1250,5 +1251,38 @@ def run_export_bundle(job_id: int, export_id: int) -> None:
             job.finished_at = _utcnow()
             if export_row is not None:
                 export_row.error = type(exc).__name__
+            session.commit()
+            raise
+
+
+def run_delete_data(job_id: int) -> None:
+    """Complete wipe (M9): every table except `users`, every stored file.
+    The verification report (before/after row counts + files-remaining
+    check) is written into this job's own `payload` so the existing job-
+    polling UI surfaces it with no new endpoint."""
+    with get_sessionmaker()() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"jobs row {job_id} does not exist")
+        if job.status in (JobStatus.succeeded, JobStatus.cancelled):
+            return
+        job.status = JobStatus.running
+        job.started_at = _utcnow()
+        job.progress = 0
+        job.total = 1
+        session.commit()
+        try:
+            storage = LocalStorage(get_config().data_dir)
+            report = wipe_everything(session, storage, keep_job_id=job.id)
+            job.payload = {"report": report}
+            job.progress = 1
+            job.status = JobStatus.succeeded
+            job.finished_at = _utcnow()
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            job.status = JobStatus.failed
+            job.error = type(exc).__name__
+            job.finished_at = _utcnow()
             session.commit()
             raise

@@ -15,6 +15,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     updateAiSettings: vi.fn(),
     getCareerProfile: vi.fn(),
     updateCareerProfile: vi.fn(),
+    getCurrentUser: vi.fn(),
+    requestWipe: vi.fn(),
   };
 });
 
@@ -22,6 +24,7 @@ const mockedGetSettings = vi.mocked(api.getSettings);
 const mockedUpdate = vi.mocked(api.updateEnrichmentSettings);
 const mockedUpdateAi = vi.mocked(api.updateAiSettings);
 const mockedGetCareerProfile = vi.mocked(api.getCareerProfile);
+const mockedGetCurrentUser = vi.mocked(api.getCurrentUser);
 
 function settingsFixture(overrides: Partial<api.SettingsRead> = {}): api.SettingsRead {
   return {
@@ -62,6 +65,8 @@ describe("SettingsPage", () => {
     mockedUpdateAi.mockReset();
     mockedGetCareerProfile.mockReset();
     mockedGetCareerProfile.mockResolvedValue(EMPTY_CAREER_PROFILE);
+    mockedGetCurrentUser.mockReset();
+    mockedGetCurrentUser.mockResolvedValue({ id: 1, email: "test@example.com" });
   });
 
   it("shows the disclosure dialog before enabling, and does not call the API until confirmed", async () => {
@@ -142,6 +147,28 @@ describe("SettingsPage", () => {
       monthly_budget_usd: 3,
     });
     expect(await screen.findByTestId("ai-saved")).toBeInTheDocument();
+  });
+
+  it("danger zone requires typing the account email before wiping", async () => {
+    mockedGetSettings.mockResolvedValue(settingsFixture());
+    const mockedRequestWipe = vi.mocked(api.requestWipe);
+    mockedRequestWipe.mockResolvedValue({ job_id: 42 });
+    renderWithClient();
+
+    await userEvent.click(await screen.findByTestId("wipe-open"));
+    const confirmButton = screen.getByTestId("wipe-confirm");
+    expect(confirmButton).toBeDisabled();
+    expect(mockedRequestWipe).not.toHaveBeenCalled();
+
+    await userEvent.type(screen.getByTestId("wipe-confirm-input"), "wrong@example.com");
+    expect(confirmButton).toBeDisabled();
+
+    await userEvent.clear(screen.getByTestId("wipe-confirm-input"));
+    await userEvent.type(screen.getByTestId("wipe-confirm-input"), "test@example.com");
+    expect(confirmButton).not.toBeDisabled();
+
+    await userEvent.click(confirmButton);
+    expect(mockedRequestWipe).toHaveBeenCalledWith("test@example.com");
   });
 
   it("never renders API key input fields", async () => {

@@ -1,5 +1,10 @@
 // Typed client for the backend API (reached via the Next.js /api/* proxy).
 
+// CSRF posture (M9): SameSite=Strict cookies plus this required custom
+// header on every mutating request — a cross-site form/link can never set
+// it, so it's a cheap defense-in-depth check alongside SameSite.
+export const CSRF_HEADERS = { "X-Requested-With": "XMLHttpRequest" } as const;
+
 export type ServiceState = "healthy" | "unreachable";
 
 export interface HealthResponse {
@@ -17,6 +22,9 @@ export interface JobRead {
   status: JobStatus;
   progress: number;
   total: number;
+  // IDs/scalars/counts only by construction — the complete-wipe job's
+  // verification report (M9) rides here too.
+  payload: Record<string, unknown>;
   error: string | null;
   created_at: string;
   started_at: string | null;
@@ -107,10 +115,42 @@ export async function getHealth(): Promise<HealthResponse> {
   return (await response.json()) as HealthResponse;
 }
 
+// --- auth (M9) ---------------------------------------------------------------
+
+export interface UserRead {
+  id: number;
+  email: string;
+}
+
+export async function login(email: string, password: string): Promise<UserRead> {
+  const response = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `login failed with status ${response.status}`);
+  }
+  return (await response.json()) as UserRead;
+}
+
+export async function logout(): Promise<void> {
+  await fetch("/api/auth/logout", { method: "POST", headers: CSRF_HEADERS });
+}
+
+export async function getCurrentUser(): Promise<UserRead | null> {
+  const response = await fetch("/api/auth/me", { cache: "no-store" });
+  if (response.status === 401) return null;
+  if (!response.ok) {
+    throw new Error(`current-user fetch failed with status ${response.status}`);
+  }
+  return (await response.json()) as UserRead;
+}
+
 export async function enqueueDemoJob(): Promise<JobRead> {
   const response = await fetch("/api/jobs/demo", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({}),
   });
   if (!response.ok) {
@@ -133,7 +173,7 @@ export async function uploadImportZip(file: File): Promise<UploadAccepted> {
   const params = new URLSearchParams({ filename: file.name });
   const response = await fetch(`/api/imports/upload?${params.toString()}`, {
     method: "POST",
-    headers: { "Content-Type": "application/zip" },
+    headers: { "Content-Type": "application/zip", ...CSRF_HEADERS },
     body: file,
   });
   if (!response.ok) {
@@ -196,7 +236,7 @@ export async function selectConversations(
 ): Promise<ExtractAccepted> {
   const response = await fetch(`/api/imports/${importId}/conversations/selection`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({ conversation_ids: conversationIds }),
   });
   if (!response.ok) {
@@ -365,7 +405,7 @@ export async function getItemFacets(): Promise<ItemFacets> {
 export async function updateItem(itemId: number, patch: ItemUpdatePatch): Promise<ItemRead> {
   const response = await fetch(`/api/items/${itemId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(patch),
   });
   if (!response.ok) {
@@ -377,7 +417,7 @@ export async function updateItem(itemId: number, patch: ItemUpdatePatch): Promis
 export async function bulkUpdateItems(payload: BulkUpdatePayload): Promise<BulkUpdateResult> {
   const response = await fetch("/api/items/bulk", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -389,7 +429,7 @@ export async function bulkUpdateItems(payload: BulkUpdatePayload): Promise<BulkU
 export async function enrichItems(payload: EnrichPayload): Promise<EnrichAccepted> {
   const response = await fetch("/api/items/enrich", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -432,7 +472,7 @@ export async function getSettings(): Promise<SettingsRead> {
 export async function updateEnrichmentSettings(enrichmentEnabled: boolean): Promise<SettingsRead> {
   const response = await fetch("/api/settings/enrichment", {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({ enrichment_enabled: enrichmentEnabled }),
   });
   if (!response.ok) {
@@ -447,7 +487,7 @@ export async function updateEnrichmentSettings(enrichmentEnabled: boolean): Prom
 export async function updateAiSettings(patch: AiSettingsPatch): Promise<SettingsRead> {
   const response = await fetch("/api/settings/ai", {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(patch),
   });
   if (!response.ok) {
@@ -493,7 +533,7 @@ export interface AnalysisAccepted {
 async function postAnalysis(path: string, body: unknown): Promise<AnalysisAccepted> {
   const response = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -558,7 +598,7 @@ export interface ClusterPatch {
 export async function updateCluster(clusterId: number, patch: ClusterPatch): Promise<ClusterRead> {
   const response = await fetch(`/api/clusters/${clusterId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(patch),
   });
   if (!response.ok) {
@@ -710,7 +750,7 @@ export async function generateProjects(
 ): Promise<GenerateAccepted> {
   const response = await fetch("/api/projects/generate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -727,7 +767,7 @@ export async function combineProjects(
 ): Promise<GenerateAccepted> {
   const response = await fetch("/api/projects/combine", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({ parent_project_ids: parentProjectIds }),
   });
   if (!response.ok) {
@@ -755,7 +795,7 @@ export async function getProject(projectId: number): Promise<ProjectDetail> {
 export async function updateProject(projectId: number, patch: ProjectPatch): Promise<ProjectRead> {
   const response = await fetch(`/api/projects/${projectId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(patch),
   });
   if (!response.ok) {
@@ -765,7 +805,10 @@ export async function updateProject(projectId: number, patch: ProjectPatch): Pro
 }
 
 export async function regenerateProject(projectId: number): Promise<GenerateAccepted> {
-  const response = await fetch(`/api/projects/${projectId}/regenerate`, { method: "POST" });
+  const response = await fetch(`/api/projects/${projectId}/regenerate`, {
+    method: "POST",
+    headers: CSRF_HEADERS,
+  });
   if (!response.ok) {
     throw await errorFromResponse(response, `regenerate failed with status ${response.status}`);
   }
@@ -773,7 +816,10 @@ export async function regenerateProject(projectId: number): Promise<GenerateAcce
 }
 
 export async function requestAdvisorReview(projectId: number): Promise<GenerateAccepted> {
-  const response = await fetch(`/api/projects/${projectId}/advisor`, { method: "POST" });
+  const response = await fetch(`/api/projects/${projectId}/advisor`, {
+    method: "POST",
+    headers: CSRF_HEADERS,
+  });
   if (!response.ok) {
     throw await errorFromResponse(
       response,
@@ -800,7 +846,7 @@ export async function createMilestone(
 ): Promise<MilestoneRead> {
   const response = await fetch(`/api/projects/${projectId}/milestones`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -819,7 +865,7 @@ export async function updateMilestone(
 ): Promise<MilestoneRead> {
   const response = await fetch(`/api/projects/${projectId}/milestones/${milestoneId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(patch),
   });
   if (!response.ok) {
@@ -834,6 +880,7 @@ export async function updateMilestone(
 export async function deleteMilestone(projectId: number, milestoneId: number): Promise<void> {
   const response = await fetch(`/api/projects/${projectId}/milestones/${milestoneId}`, {
     method: "DELETE",
+    headers: CSRF_HEADERS,
   });
   if (!response.ok) {
     throw await errorFromResponse(
@@ -849,7 +896,7 @@ export async function reorderMilestones(
 ): Promise<MilestoneRead[]> {
   const response = await fetch(`/api/projects/${projectId}/milestones/order`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({ milestone_ids: milestoneIds }),
   });
   if (!response.ok) {
@@ -906,6 +953,7 @@ export async function requestCareerArtifact(
 ): Promise<GenerateAccepted> {
   const response = await fetch(`/api/projects/${projectId}/artifacts/${kind}`, {
     method: "POST",
+    headers: CSRF_HEADERS,
   });
   if (!response.ok) {
     throw await errorFromResponse(
@@ -968,7 +1016,7 @@ export async function requestExport(
 ): Promise<ExportAccepted> {
   const response = await fetch("/api/exports", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({ format, project_id: projectId ?? null }),
   });
   if (!response.ok) {
@@ -1016,7 +1064,7 @@ export async function updateCareerProfile(
 ): Promise<CareerProfileRead> {
   const response = await fetch("/api/career-profile", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify(profile),
   });
   if (!response.ok) {
@@ -1033,7 +1081,7 @@ export async function updateScoringWeights(
 ): Promise<SettingsRead> {
   const response = await fetch("/api/settings/scoring", {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
     body: JSON.stringify({ scoring_weights: weights }),
   });
   if (!response.ok) {
@@ -1043,4 +1091,60 @@ export async function updateScoringWeights(
     );
   }
   return (await response.json()) as SettingsRead;
+}
+
+// --- deletion & privacy (M9) --------------------------------------------------
+
+export interface ImportDeletionReport {
+  conversations_deleted: number;
+  messages_deleted: number;
+  items_deleted: number;
+  items_kept: number;
+  file_deleted: boolean;
+}
+
+export async function deleteImport(
+  importId: number,
+  confirmText: string,
+  cascade: boolean,
+): Promise<ImportDeletionReport> {
+  const response = await fetch(`/api/imports/${importId}/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
+    body: JSON.stringify({ confirm_text: confirmText, cascade }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `import delete failed with status ${response.status}`);
+  }
+  return (await response.json()) as ImportDeletionReport;
+}
+
+export async function deleteProject(projectId: number, confirmText: string): Promise<void> {
+  const response = await fetch(`/api/projects/${projectId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
+    body: JSON.stringify({ confirm_text: confirmText }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `project delete failed with status ${response.status}`,
+    );
+  }
+}
+
+export interface WipeAccepted {
+  job_id: number;
+}
+
+export async function requestWipe(confirmEmail: string): Promise<WipeAccepted> {
+  const response = await fetch("/api/privacy/wipe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
+    body: JSON.stringify({ confirm_email: confirmEmail }),
+  });
+  if (!response.ok) {
+    throw await errorFromResponse(response, `wipe request failed with status ${response.status}`);
+  }
+  return (await response.json()) as WipeAccepted;
 }

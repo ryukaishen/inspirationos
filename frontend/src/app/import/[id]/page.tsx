@@ -1,11 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useParams, useRouter } from "next/navigation";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
+import { ConfirmDeleteDialog } from "@/components/deletion/confirm-delete-dialog";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FINISHED_IMPORT_STATUSES, getImport, type ImportStatus } from "@/lib/api";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  ApiError,
+  FINISHED_IMPORT_STATUSES,
+  deleteImport,
+  getImport,
+  type ImportStatus,
+} from "@/lib/api";
 
 // Mirrors backend's SELECTABLE_STATUSES in app/api/conversations.py — a
 // failed import with a stored file stays selectable so a failed extract can
@@ -14,7 +24,10 @@ const SELECTABLE_IMPORT_STATUSES: readonly ImportStatus[] = ["scanned", "extract
 
 export default function ImportDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const importId = Number(params.id);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [cascade, setCascade] = useState(false);
 
   const { data: detail, isError } = useQuery({
     queryKey: ["import", importId],
@@ -24,6 +37,14 @@ export default function ImportDetailPage() {
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status !== undefined && FINISHED_IMPORT_STATUSES.includes(status) ? false : 2000;
+    },
+  });
+
+  const removeImport = useMutation({
+    mutationFn: (confirmText: string) => deleteImport(importId, confirmText, cascade),
+    onSuccess: () => {
+      setDeleteOpen(false);
+      router.push("/import");
     },
   });
 
@@ -85,10 +106,52 @@ export default function ImportDetailPage() {
                     </Link>
                   </p>
                 )}
+              {detail.status !== "deleted" && (
+                <div className="border-t pt-3">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    data-testid="import-delete-open"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    Delete import
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </CardContent>
       </Card>
+
+      {detail && (
+        <ConfirmDeleteDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title="Delete raw import data?"
+          description="The stored ZIP, conversations, and messages are always removed. Choose whether derived inspiration items are kept (source references cleared) or deleted too."
+          confirmValue={detail.filename}
+          onConfirm={() => removeImport.mutate(detail.filename)}
+          isPending={removeImport.isPending}
+          error={
+            removeImport.error instanceof ApiError
+              ? removeImport.error.message
+              : removeImport.isError
+                ? "Delete failed."
+                : null
+          }
+          testIdPrefix="import-delete"
+        >
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              data-testid="import-delete-cascade"
+              checked={cascade}
+              onChange={(event) => setCascade(event.target.checked)}
+            />
+            Also delete the derived inspiration items (default keeps them, with source references
+            cleared)
+          </label>
+        </ConfirmDeleteDialog>
+      )}
     </main>
   );
 }

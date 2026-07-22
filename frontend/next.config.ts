@@ -4,6 +4,9 @@ import type { NextConfig } from "next";
 // (same-origin cookies later, no CORS surface). BACKEND_URL is set by compose;
 // the default matches a locally-run backend.
 const nextConfig: NextConfig = {
+  // Traced, self-contained server bundle for the prod image (Dockerfile.prod)
+  // — `next dev` (used in dev's docker-compose.yml) ignores this entirely.
+  output: "standalone",
   async rewrites() {
     const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
     return [

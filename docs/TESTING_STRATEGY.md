@@ -70,9 +70,21 @@ reproducing it before the fix is considered done.
   rejections, scoring math, budget enforcement, log redaction, schema
   validation + repair loop (canned bad LLM outputs).
 - **api/** — FastAPI `TestClient` against real Postgres, per-test
-  transactions/rollback.
+  transactions/rollback. Every route requires a session (M9): `conftest.py`'s
+  `client` fixture creates a synthetic user and logs in once per test (real
+  cookie + the CSRF header set as `TestClient` defaults), so this needed no
+  changes to the ~10 pre-M9 test files that already use it. `anon_client`
+  (no login, same CSRF default) covers the auth-negative tests —
+  `test_auth.py`, `test_route_gating.py` (sweeps every route via
+  `app.openapi()["paths"]`, not `app.routes` — this FastAPI version resolves
+  included routers lazily, so `openapi()` is the version-agnostic source of
+  truth), `test_deletion.py`.
 - **workers/** — RQ tasks executed synchronously against real Redis;
-  idempotency (run twice, same result) and retry paths.
+  idempotency (run twice, same result) and retry paths. Two files
+  (`test_parser_pipeline.py` in `api/`, and `test_log_redaction_pipeline.py`)
+  build their own really-committed-rows `client`/session fixtures rather
+  than the savepoint-scoped one (workers use their own DB session), so they
+  need the login/CSRF treatment applied locally too.
 - Provider adapters (Anthropic/OpenAI) tested against faked HTTP (`respx`);
   **no live API keys in tests or CI, ever.** MockProvider covers all AI
   pipelines.
@@ -93,15 +105,32 @@ keyboard review hook) and API-client contract tests against mocked responses.
 Runs against the full compose stack with `AI_PROVIDER=mock`; CI additionally
 sets `EMBEDDING_PROVIDER=mock` so the e2e job stays hermetic (locally the
 default `local` fastembed provider works too — the first analysis run just
-downloads the embedding model once). Critical path:
-login → upload synthetic ZIP → confirm self-DM → extract → inbox counts →
-cluster → bulk-describe cluster → keyboard-review a needs_context item →
-generate projects → adjust weights (observe re-rank) → combine two ideas →
-advisor review → generate README → export Markdown/JSON → delete import →
-verify gone. `projects.spec.ts` (M7) covers generate → score bars → weight
-re-rank (asserted with zero `/api/projects/generate` requests) → save
-weights → compare → combine → detail field edit → milestone add/reorder →
-advisor review with all five sections → regenerate advisor to v2.
+downloads the embedding model once). Critical path (spread across spec
+files, not one giant test): upload synthetic ZIP → confirm self-DM →
+extract → inbox counts → cluster → bulk-describe cluster → keyboard-review a
+needs_context item → generate projects → adjust weights (observe re-rank) →
+combine two ideas → advisor review → generate README → export Markdown/JSON.
+`projects.spec.ts` (M7) covers generate → score bars → weight re-rank
+(asserted with zero `/api/projects/generate` requests) → save weights →
+compare → combine → detail field edit → milestone add/reorder → advisor
+review with all five sections → regenerate advisor to v2.
+
+Every non-auth route requires a session (M9), so a login has to happen
+somewhere before any of the above can run. `e2e/global-setup.ts` performs
+**one** real login (`e2e/auth-constants.ts`'s fixed test credential — seeded
+by `python -m app.cli create-user`, see below) and saves the session cookie
+as Playwright `storageState`; `playwright.config.ts` sets that as the
+default `use.storageState` for every project, so every other spec file
+needs zero auth-specific code, exactly as before M9. `specs/auth-deletion.spec.ts`
+is the one file that overrides `storageState` to start logged out
+(`test.use({ storageState: { cookies: [], origins: [] } })`) — it drives the
+login UI itself (redirect-when-logged-out, wrong credentials, correct
+credentials, logout revokes access immediately) and covers the raw-import
+deletion scope (upload → typed-confirmation delete → verify it shows
+`deleted` in the active list). Project deletion and the complete wipe are
+covered at the API/service level in `backend/tests/api/test_deletion.py`
+(see below) rather than through the UI, since a real wipe run against this
+shared dev database would be destructive — see that file's docstring.
 
 ## Canonical commands
 
@@ -117,17 +146,25 @@ cd frontend && npm run lint
 cd frontend && npx tsc --noEmit
 cd frontend && npm run test -- --run
 
-# E2E (compose stack must be up)
+# E2E (compose stack must be up; every route needs a session — M9)
 docker compose up -d --build
+docker compose exec -T backend python -m app.cli create-user \
+  --email e2e@example.com --password e2e-test-password-not-a-secret
 cd e2e && npx playwright test
 ```
+
+`make e2e` wraps all three steps above. The email/password must match
+`e2e/auth-constants.ts` — `global-setup.ts` logs in with them before any spec
+runs and fails loudly (not a mysterious redirect-to-`/login` in every spec)
+if the account doesn't exist yet.
 
 ## CI (GitHub Actions, every push/PR)
 
 - **backend** — ruff + mypy + pytest with pgvector-Postgres and Redis service
   containers, coverage report.
 - **frontend** — eslint + tsc + vitest.
-- **e2e** — compose up + Playwright critical path.
+- **e2e** — compose up + seed the e2e test user (`create-user`) + Playwright
+  critical path.
 - **gitleaks** — secret scan of the diff and history.
 
 A milestone is complete only when CI is green.

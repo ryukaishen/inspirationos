@@ -1,0 +1,43 @@
+# Production image (M9): multi-stage build, no bind mounts, no --reload.
+# Same image serves both the `backend` (uvicorn) and `worker` (RQ) services
+# in docker-compose.prod.yml — only the container command differs.
+# Migrations are an explicit operator step (`make deploy-migrate`), never
+# run automatically on container start — see DEPLOYMENT_PLAN.md.
+
+FROM python:3.12-slim AS builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
+RUN pip install --no-cache-dir .
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+RUN useradd --system --create-home --uid 1001 appuser
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
+# Pre-create the data dir owned by appuser: docker-compose.prod.yml mounts a
+# named volume here, and on first attach Docker copies the image's existing
+# directory (ownership included) into the volume — without this, the volume
+# starts root-owned and the non-root container can never write to it.
+RUN mkdir -p /app/var/data && chown -R appuser:appuser /app/var
+
+USER appuser
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

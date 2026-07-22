@@ -15,6 +15,7 @@ function job(id: number, status: JobRead["status"], progress = 0): JobRead {
     status,
     progress,
     total: 10,
+    payload: {},
     error: status === "failed" ? "SomeError" : null,
     created_at: "2026-07-18T00:00:00Z",
     started_at: null,

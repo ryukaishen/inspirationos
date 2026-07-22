@@ -1,0 +1,124 @@
+# Production stack (M9). Standalone rather than an overlay on
+# docker-compose.yml on purpose: Compose's default list-merge semantics for
+# `volumes`/`ports` are additive across -f files (not "replace"), so an
+# overlay risks silently keeping the dev bind mounts and published ports
+# active in "production" — a real security footgun, not just a style choice.
+# A standalone file makes the whole prod topology auditable in one place.
+#
+# Only `caddy` publishes ports to the host; postgres/redis/backend/worker
+# have no `ports:` entry, so they are reachable from other containers on
+# this compose network but never from outside the host.
+#
+# Deploy workflow (see DEPLOYMENT_PLAN.md):
+#   docker compose -f docker-compose.prod.yml build
+#   make deploy-migrate   # explicit — never runs automatically on boot
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inspiration}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-inspiration}
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inspiration} -d ${POSTGRES_DB:-inspiration}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment: &backend_env
+      ENV: production
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set - see .env.example for how to generate one}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-inspiration}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-inspiration}
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/var/data
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-2048}
+      MAX_ZIP_ENTRIES: ${MAX_ZIP_ENTRIES:-100000}
+      MAX_ZIP_UNCOMPRESSED_MB: ${MAX_ZIP_UNCOMPRESSED_MB:-10240}
+      MAX_ZIP_COMPRESSION_RATIO: ${MAX_ZIP_COMPRESSION_RATIO:-100}
+      ENRICHMENT_REQUESTS_PER_MINUTE: ${ENRICHMENT_REQUESTS_PER_MINUTE:-20}
+      ENRICHMENT_TIMEOUT_SECONDS: ${ENRICHMENT_TIMEOUT_SECONDS:-10}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_GENERATION_MODEL: ${ANTHROPIC_GENERATION_MODEL:-claude-sonnet-5}
+      ANTHROPIC_FAST_MODEL: ${ANTHROPIC_FAST_MODEL:-claude-haiku-4-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_GENERATION_MODEL: ${OPENAI_GENERATION_MODEL:-gpt-5.2}
+      OPENAI_FAST_MODEL: ${OPENAI_FAST_MODEL:-gpt-5-mini}
+      AI_MONTHLY_BUDGET_USD: ${AI_MONTHLY_BUDGET_USD:-10}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      SESSION_COOKIE_SECURE: "true"
+    volumes:
+      - data_prod:/app/var/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    command: python -m app.workers.runner
+    restart: unless-stopped
+    environment: *backend_env
+    volumes:
+      - data_prod:/app/var/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN must be set}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  pgdata_prod:
+  data_prod:
+  caddy_data:
+  caddy_config:

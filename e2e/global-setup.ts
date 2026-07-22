@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { request } from "@playwright/test";
+
+import { E2E_USER_EMAIL, E2E_USER_PASSWORD, STORAGE_STATE_PATH } from "./auth-constants";
 
 // Synthetic fixture ZIPs are generated at test time by the same stdlib-only
 // builder the backend tests use — nothing export-like is ever committed.
@@ -28,7 +31,31 @@ function runFixtureBuilder(): void {
   );
 }
 
-export default function globalSetup(): void {
+// Logs in once and saves the session cookie as Playwright storageState,
+// reused by every spec via playwright.config.ts's `use.storageState` — one
+// real login instead of one per spec file. The account itself is seeded by
+// `python -m app.cli create-user` (CI workflow / Makefile `e2e` target)
+// before this runs; a missing/wrong account fails loudly here rather than
+// as a mysterious redirect-to-/login in every spec.
+async function loginAndSaveStorageState(): Promise<void> {
+  mkdirSync(path.dirname(STORAGE_STATE_PATH), { recursive: true });
+  const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
+  const context = await request.newContext({ baseURL });
+  const response = await context.post("/api/auth/login", {
+    headers: { "X-Requested-With": "XMLHttpRequest" },
+    data: { email: E2E_USER_EMAIL, password: E2E_USER_PASSWORD },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `e2e login failed (${response.status()}) — did the create-user step run against this stack?`,
+    );
+  }
+  await context.storageState({ path: STORAGE_STATE_PATH });
+  await context.dispose();
+}
+
+export default async function globalSetup(): Promise<void> {
   mkdirSync(FIXTURES_DIR, { recursive: true });
   runFixtureBuilder();
+  await loginAndSaveStorageState();
 }

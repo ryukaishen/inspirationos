@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { STORAGE_STATE_PATH } from "./auth-constants";
+
 // Runs against the full compose stack (docker compose up -d --build):
 // frontend on :3000 proxying /api/* to the backend, worker consuming queues.
 export default defineConfig({
@@ -17,6 +19,10 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "on-first-retry",
+    // M9: every non-auth route requires a session — global-setup.ts logs in
+    // once and saves this. auth-deletion.spec.ts overrides it per-file to
+    // start logged out and drive the login UI itself.
+    storageState: STORAGE_STATE_PATH,
   },
   projects: [
     {

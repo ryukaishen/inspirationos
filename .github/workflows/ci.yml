@@ -109,6 +109,12 @@ jobs:
       - name: Wait for stack (health through the frontend proxy)
         run: |
           timeout 180 bash -c 'until curl -fsS http://localhost:3000/api/health; do sleep 3; done'
+      - name: Seed the e2e test user
+        # Credentials must match e2e/auth-constants.ts; global-setup.ts logs
+        # in with them and shares the session across every spec file.
+        run: |
+          docker compose exec -T backend python -m app.cli create-user \
+            --email e2e@example.com --password e2e-test-password-not-a-secret
       - name: Playwright tests
         working-directory: e2e
         run: npx playwright test

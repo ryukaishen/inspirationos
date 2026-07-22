@@ -24,6 +24,7 @@ from app.models.job import JobKind
 from app.models.project import Project, ProjectMilestone, ProjectStatus
 from app.redis_client import get_redis
 from app.schemas.artifact import ArtifactRead, CareerArtifactKind
+from app.schemas.privacy import ProjectDeletionRequest
 from app.schemas.project import (
     AdvisorReviewRead,
     CombineRequest,
@@ -41,6 +42,7 @@ from app.schemas.project import (
 from app.services.enrichment.policy import is_eligible_for_generation
 from app.services.generation.career_outputs import latest_artifacts_by_kind
 from app.services.generation.projects import resolve_source_item_ids
+from app.services.privacy.deletion import delete_project
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -176,6 +178,23 @@ def update_project(project_id: int, body: ProjectUpdateRequest, db: DbSession) -
         setattr(project, field, value)
     db.commit()
     return ProjectRead.model_validate(project)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project_endpoint(project_id: int, body: ProjectDeletionRequest, db: DbSession) -> None:
+    """Typed confirmation: `confirm_text` must exactly match the project's
+    title. Milestones/artifacts/exports cascade via their FK; the underlying
+    export files are left for the complete wipe's filesystem sweep."""
+    project = _get_project_or_404(db, project_id)
+    if body.confirm_text != project.title:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "confirmation_mismatch",
+                "message": "confirmation text does not match the project's title",
+            },
+        )
+    delete_project(db, project)
 
 
 @router.post(

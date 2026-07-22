@@ -47,18 +47,26 @@ Browser ──HTTPS──> Caddy (VPS, auto-TLS)          [dev: no Caddy, Next d
 ```
 inspiration-os/
 ├── docker-compose.yml            # dev: postgres(pgvector), redis, backend, worker, frontend
-├── docker-compose.prod.yml       # prod overlay: caddy, restart policies (added in M9)
+├── docker-compose.prod.yml       # prod (M9): standalone, not an overlay — see "Production
+│                                 #   deployment" below for why merging with the dev file
+│                                 #   was rejected. Only Caddy publishes ports.
+├── Caddyfile                     # auto-TLS reverse proxy to frontend:3000 (M9)
 ├── .env.example / .gitignore / Makefile / .pre-commit-config.yaml
 ├── .github/workflows/ci.yml
 ├── docs/
 ├── backend/
 │   ├── pyproject.toml            # fastapi, sqlalchemy2, alembic, rq, pydantic2, pgvector,
 │   │                             #   fastembed, anthropic, openai, argon2-cffi, psycopg
+│   ├── Dockerfile                # dev image (bind-mounted, --reload)
+│   ├── Dockerfile.prod            # prod image (M9): multi-stage, no bind mounts, non-root
+│   ├── scripts/                  # backup.sh, restore.sh (M9)
 │   ├── alembic/                  # migrations
 │   ├── app/
 │   │   ├── main.py, config.py    # pydantic-settings from env
-│   │   ├── api/                  # routers: auth, imports, conversations, items, clusters,
-│   │   │                         #   projects, career, artifacts, jobs, settings, export, health
+│   │   ├── api/                  # routers: auth, deps.py (get_current_user,
+│   │   │                         #   require_csrf_header), imports, conversations, items,
+│   │   │                         #   clusters, projects, career, artifacts, jobs, settings,
+│   │   │                         #   export, privacy (wipe), health
 │   │   │                         #   enqueue.py: shared jobs-row-then-enqueue helper
 │   │   ├── models/               # SQLAlchemy models (see DATA_MODEL.md)
 │   │   ├── schemas/              # Pydantic request/response models
@@ -71,18 +79,26 @@ inspiration-os/
 │   │   │   │                     #   mock_provider.py, structured.py, prompts/, budget.py
 │   │   │   ├── analysis/         # embeddings.py, clustering.py, topics.py, dedupe.py
 │   │   │   ├── generation/       # projects.py, scoring.py, combine.py, artifacts.py, advisor.py
-│   │   │   ├── storage/          # base.py (Protocol), local.py, (s3.py later)
-│   │   │   └── privacy/          # deletion.py, log_filter.py
-│   │   ├── workers/              # jobs.py (RQ tasks), runner.py
-│   │   └── cli.py                # create-user, requeue-failed, wipe-data
+│   │   │   ├── storage/          # base.py (Protocol), local.py (+ clear()/count_files() for
+│   │   │   │                     #   the wipe), (s3.py later)
+│   │   │   ├── auth/             # passwords.py (argon2id), sessions.py (Redis, HMAC-signed
+│   │   │   │                     #   cookie), rate_limit.py (login attempts) — M9
+│   │   │   └── privacy/          # deletion.py (raw import/project/wipe), log_filter.py — M9
+│   │   ├── workers/              # jobs.py (RQ tasks incl. run_delete_data), runner.py
+│   │   └── cli.py                # create-user, wipe-data
 │   └── tests/                    # unit/ api/ workers/ + fixtures/ + fixture_builder.py
 ├── frontend/
-│   ├── next.config.ts            # rewrite /api/* -> backend (same-origin cookies)
-│   ├── src/app/                  # login, import, conversations, inbox, review, clusters,
+│   ├── next.config.ts            # rewrite /api/* -> backend (same-origin cookies);
+│   │                             #   output: "standalone" for Dockerfile.prod
+│   ├── Dockerfile.prod            # prod image (M9): multi-stage, Next's standalone bundle
+│   ├── src/
+│   │   ├── proxy.ts              # M9: redirect-to-/login UX guard (Next 16 renamed
+│   │   │                         #   middleware.ts → proxy.ts) — not the security boundary
+│   │   ├── app/                  # login, import, conversations, inbox, review, clusters,
 │   │   │                         #   projects, projects/[id], settings
 │   │   ├── components/  lib/
 │   └── tests/                    # vitest + React Testing Library
-└── e2e/                          # playwright.config.ts + specs/
+└── e2e/                          # playwright.config.ts + auth-constants.ts + specs/
 ```
 
 ## Job processing
@@ -547,3 +563,157 @@ mutation→jobId-state→`refetchInterval`-poll→callback block that M7 had
 inlined three times (`projects/[id]/page.tsx`, `AdvisorPanel`,
 `GenerateDialog`'s consumer) — justified now because M8 adds five more
 independent job-polling sites (one per artifact kind) plus export.
+
+## Auth, deletion, and log redaction (M9)
+
+**Sessions:** `app/api/auth.py` (`POST /auth/login|logout`, `GET /auth/me`)
+issues a server-side Redis session (`services/auth/sessions.py`):
+`secrets.token_urlsafe(32)` token → Redis `session:{token}` = user id, sliding
+TTL (`session_ttl_seconds`). The cookie value is `{token}.{hmac}` — an
+HMAC-SHA256 of the token keyed by `AppConfig.secret_key`, giving that
+previously-unused setting a real purpose (tamper-evidence only; revocation
+is Redis-side, immediate on logout). Passwords are argon2id
+(`services/auth/passwords.py`). Login is rate-limited by client IP
+(`services/auth/rate_limit.py`, Redis fixed-window counter) — in production
+only Caddy is internet-facing and every request reaches the backend via the
+frontend container, so this is a global brake on login attempts rather than
+a per-attacker one, an acceptable tradeoff at single-user scale.
+
+**Route gating:** `app/api/__init__.py` wraps every router except `health`
+and `auth` in an inner `protected_router` carrying
+`dependencies=[Depends(get_current_user)]`; the outer `api_router` carries
+`dependencies=[Depends(require_csrf_header)]` for every route including
+`auth` itself. Both dependencies live in `app/api/deps.py`. FastAPI resolves
+router-level dependencies before endpoint-level body parsing (confirmed
+empirically), so an unauthenticated POST with no body still 401s rather than
+being masked by a 422. The route-sweep test (`tests/api/test_route_gating.py`)
+enumerates every path via `app.openapi()["paths"]` rather than walking
+`app.routes` directly — this FastAPI version resolves included routers
+lazily (`_IncludedRouter`), so `app.routes` is no longer a flat list; the
+OpenAPI schema is the version-agnostic source of truth for "every registered
+route" instead.
+
+**CSRF:** `require_csrf_header` rejects any non-GET/HEAD/OPTIONS request
+missing `X-Requested-With: XMLHttpRequest` — a header a cross-site
+form/link/image can never set, alongside the session cookie's
+`SameSite=Strict`. The frontend's `lib/api.ts` attaches this header to every
+mutating call.
+
+**Cookie `Secure` and the test transport:** the session cookie is always
+`httponly, secure, samesite=strict` in real use — Chromium (including
+Playwright) and other real browsers treat `http://localhost` as a secure
+context and happily store/resend it there. FastAPI's `TestClient`, however,
+talks plain `http://testserver` through Python's stdlib `http.cookiejar`,
+which has no such exception and silently drops `Secure` cookies. Rather than
+weaken the shipped default, `AppConfig.session_cookie_secure` (default
+`True`) is set to `false` only inside the pytest process
+(`tests/conftest.py` sets `SESSION_COOKIE_SECURE=false` before the first
+`get_config()` call) — production and manual/Playwright-driven dev are
+unaffected.
+
+**Test-suite compatibility:** gating every route would have broken all
+M2–M8 API tests, which share one `client` fixture. Instead of touching each
+test file, `tests/conftest.py`'s `client` fixture now creates a synthetic
+user and logs in once per test (real session cookie + the CSRF header set
+as TestClient defaults), so the ~10 existing test files needed zero
+changes. A new `anon_client` fixture (same CSRF default, no login) covers
+the auth-negative tests. Two test files that build their own `client`
+fixture around real-committed rows (`test_parser_pipeline.py`, worker tests)
+needed the same treatment applied locally since they don't inherit
+conftest's fixture.
+
+**Deletion (`services/privacy/deletion.py`):**
+- `delete_raw_import` (`POST /api/imports/{id}/delete`, typed confirmation =
+  the filename): always removes the ZIP + conversations + messages;
+  `cascade=false` nulls `items.import_id/conversation_id/message_id`
+  (message_id nulled *before* messages are deleted, to satisfy the FK);
+  `cascade=true` also deletes the items, first clearing
+  `enrichment_attempts` (no `ON DELETE CASCADE`) and any touched
+  `duplicate_groups` (null every member's `duplicate_group_id`, delete the
+  group — safe even for a member outside this import, since groups rebuild
+  from scratch on the next extract/cluster run).
+- `delete_project` (`DELETE /api/projects/{id}`, typed confirmation = the
+  title): existing cascades do the rest; export files are deliberately left
+  for the wipe's filesystem sweep (see PRIVACY_SECURITY.md).
+- `wipe_everything` (`POST /api/privacy/wipe`, typed confirmation = the
+  account email): the `delete_data` `JobKind` (pre-scaffolded since M1,
+  unused until now) runs `run_delete_data` — truncates every table except
+  `users` in FK-safe order, clears every stored file
+  (`Storage.clear()`/`count_files()`, new protocol methods), reseeds the
+  `settings`/`career_profile` singletons, and writes a verification report
+  (before/after row counts, files-remaining check) into the job's own
+  `payload` — `schemas/job.py::JobRead` now exposes `payload`, so the
+  existing job-polling UI surfaces the report with no new endpoint. Also
+  reachable synchronously via `python -m app.cli wipe-data` (no
+  Redis/worker needed) for a stuck deployment. `wipe_everything` takes a
+  plain `Session`, not a job id — its test
+  (`tests/api/test_deletion.py`) runs it against the ordinary
+  savepoint-scoped `db_session` on purpose, never the real-commit
+  `pg_engine` pattern other worker tests use, since this backend's Postgres
+  is the same long-lived instance behind the dev compose stack and a real
+  wipe would destroy whatever's there.
+
+**Log redaction (`services/privacy/log_filter.py`):** a `logging.Filter`
+installed on the root logger (`install_redacting_filter`, called from both
+`main.py` and `workers/runner.py`) that strips named `extra=` attributes
+matching the redacted-field list and regex-redacts `field=value`-shaped
+substrings in rendered messages, as defense-in-depth against a future
+accidental leak — the codebase already never logs content by construction
+(exception-class-name-only errors, IDs-only job payloads). The pipeline-wide
+test (`tests/workers/test_log_redaction_pipeline.py`) runs the real
+scan→extract pipeline over the rich synthetic fixture with `caplog`
+capturing everything, asserting none of the fixture's known plaintext
+strings appear — a regression guard, since nothing in the exercised path
+currently attempts to log them.
+
+**CLI (`app/cli.py`):** `create-user` (seed/update the single account;
+password via `getpass` if omitted) and `wipe-data` (the same
+`wipe_everything` service, run synchronously). `requeue-failed`, mentioned
+only in this doc's own repository-layout comment through M1–M8, was never
+implemented and isn't in M9's scope either — removed from that comment
+rather than left aspirational.
+
+## Production deployment (M9)
+
+`docker-compose.prod.yml` is a **standalone** compose file, not an overlay
+merged with `docker-compose.yml` via `-f docker-compose.yml -f
+docker-compose.prod.yml` as earlier drafts of this doc assumed. Compose's
+default merge semantics for list-valued keys (`volumes`, `ports`) are
+additive across `-f` files, not "replace" — an overlay risked silently
+keeping the dev bind mounts and published ports active in "production" (a
+real security footgun, confirmed while validating this milestone), not
+merely a style preference. A standalone file also makes the whole prod
+topology auditable in one place.
+
+- `backend/Dockerfile.prod` / `frontend/Dockerfile.prod`: multi-stage
+  builds, no bind mounts. The backend stage builds a venv, then copies only
+  `/opt/venv` into a slim runtime layer running as a non-root `appuser`;
+  `/app/var/data` is pre-created and `chown`'d to `appuser` **before** the
+  volume mount — Docker copies a named volume's mount-point content
+  (ownership included) from the image on first attach, so skipping this
+  leaves the volume root-owned and unwritable by the non-root process
+  (caught and fixed during the restore-drill rehearsal below). The frontend
+  stage builds Next's traced `output: "standalone"` bundle
+  (`next.config.ts`) and runs `node server.js` as a non-root user.
+- Only `caddy` has a `ports:` entry (`80:80`, `443:443`); postgres, redis,
+  backend, and worker are reachable from other containers on the compose
+  network but never published to the host.
+- Migrations are an explicit step (`make deploy-migrate` →
+  `docker compose -f docker-compose.prod.yml run --rm backend alembic
+  upgrade head`), never run automatically on container start — unlike the
+  dev image's `sh -c "alembic upgrade head && uvicorn ..."`.
+- `Caddyfile`: a global `email {$ACME_EMAIL}` block plus one site block
+  (`{$APP_DOMAIN}` → `reverse_proxy frontend:3000`) — Caddy issues and
+  renews the Let's Encrypt certificate and redirects HTTP→HTTPS
+  automatically for any non-`localhost` site address.
+- `backend/scripts/backup.sh` / `restore.sh`: nightly `pg_dump` (gzipped) +
+  `tar` of the `data_prod` volume; restore runs into an **isolated scratch
+  compose project** (`-p inspiration-restore-drill`), never the live
+  stack, so a drill can never overwrite real data. Rehearsed end-to-end
+  during this milestone under a separate scratch project
+  (`-p inspiration-drill`): seeded rows + a file in the data volume →
+  backup → `down -v` (full simulated disaster, volumes included) → fresh
+  `up` → restore both the dump and the tar → row counts and file contents
+  matched exactly. Caddy/TLS themselves aren't exercisable in a local
+  drill (no real domain), so that part of the deploy path is verified by
+  inspection and the `Caddyfile`'s syntax only, not a live rehearsal.

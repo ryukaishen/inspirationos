@@ -291,26 +291,46 @@ cd e2e && npx playwright test specs/artifacts-export.spec.ts
 backups and deletion.
 
 Scope:
-- [ ] Auth: argon2id, Redis sessions, httpOnly SameSite=Strict cookie, login rate limiting, CSRF posture, `create-user` CLI, all routes gated.
-- [ ] Log-redaction filter finalized + pipeline-wide assertion test.
-- [ ] Deletion flows: raw-import (keep-or-cascade choice), project, complete wipe with verification report.
-- [ ] `docker-compose.prod.yml` + multi-stage images + Caddy auto-TLS.
-- [ ] Backup scripts (nightly pg_dump + var/data) and a **tested** restore drill.
-- [ ] Migration-against-prod-copy rehearsal procedure documented and exercised.
-- [ ] Deploy documentation (DEPLOYMENT_PLAN.md updated with the real runbook).
+- [x] Auth: argon2id, Redis sessions, httpOnly SameSite=Strict cookie, login rate limiting, CSRF posture, `create-user` CLI, all routes gated.
+- [x] Log-redaction filter finalized + pipeline-wide assertion test.
+- [x] Deletion flows: raw-import (keep-or-cascade choice), project, complete wipe with verification report.
+- [x] `docker-compose.prod.yml` + multi-stage images + Caddy auto-TLS.
+- [x] Backup scripts (nightly pg_dump + var/data) and a **tested** restore drill.
+- [x] Migration-against-prod-copy rehearsal procedure documented and exercised — exercised against a fresh scratch stack built from the prod images (no real prod data exists yet, since there is no VPS deployment; `make deploy-migrate` ran cleanly through all 8 existing migrations there).
+- [x] Deploy documentation (DEPLOYMENT_PLAN.md updated with the real runbook).
 
-Acceptance criteria:
-- [ ] Route sweep test: every non-auth route rejects unauthenticated access.
-- [ ] Sessions survive backend restart; logout revokes immediately.
-- [ ] Full-pipeline log capture contains zero fixture message strings (automated).
-- [ ] Each deletion scope leaves exactly the expected rows/files (count-verified); wipe report matches reality.
-- [ ] VPS deploy serves valid HTTPS; port scan shows only Caddy exposed.
-- [ ] Restore drill from a real nightly backup succeeds with matching counts.
+Acceptance criteria (verified locally 2026-07-21 against the compose stack
+and a scratch `docker-compose.prod.yml` drill; the VPS-specific criterion
+below is the one exception — see note):
+- [x] Route sweep test: every non-auth route rejects unauthenticated access (`tests/api/test_route_gating.py`, 48 routes swept via `app.openapi()["paths"]`).
+- [x] Sessions survive backend restart; logout revokes immediately (unit-tested and manually verified in a browser: login → logout → re-redirected to `/login` → protected API 401s).
+- [x] Full-pipeline log capture contains zero fixture message strings (automated) — `tests/workers/test_log_redaction_pipeline.py` runs real scan+extract over the rich fixture with `caplog` capturing everything.
+- [x] Each deletion scope leaves exactly the expected rows/files (count-verified); wipe report matches reality — `tests/api/test_deletion.py`; raw-import deletion additionally verified end-to-end in a real browser (upload → typed-confirmation delete → status shows `deleted`).
+- [ ] VPS deploy serves valid HTTPS; port scan shows only Caddy exposed. **Not verified** — no real VPS/domain is available in this environment; `docker-compose.prod.yml`/`Caddyfile` are written and the non-Caddy services are confirmed to publish no ports, but live TLS issuance and an external port scan need a real deploy.
+- [x] Restore drill from a real nightly backup succeeds with matching counts — rehearsed end-to-end under an isolated scratch compose project (`-p inspiration-drill`, separate from the dev stack): seeded rows + a data-volume file → `pg_dump`/tar backup → full simulated disaster (`down -v`) → fresh stack → restore both → row counts and file contents matched exactly. The nightly **cron scheduling** itself wasn't set up (no VPS to install a crontab on) — only the backup/restore mechanics were exercised.
+
+Known limitations:
+- The pre-existing `/import/[id]/conversations` dev-server defect noted in
+  M8 (Next.js 16 Turbopack) was re-confirmed during this milestone's manual
+  verification, including after a full `docker compose down` + `up --build`
+  from scratch — the route still 404s locally. This blocks the specs that
+  depend on conversation selection (`clusters.spec.ts`, `inbox.spec.ts`,
+  `projects.spec.ts`, `review.spec.ts`, `artifacts-export.spec.ts`) locally;
+  it does not affect this milestone's own `auth-deletion.spec.ts` (which
+  never visits that route) or `health.spec.ts`/`import.spec.ts`, all of
+  which pass locally. Needs a CI run to close out — CI runs on Linux, not
+  this Windows+Docker-Desktop dev box, so it may simply not reproduce there.
+- The frontend's `proxy.ts` redirect-to-login guard checks cookie
+  *presence*, not validity — if a session is revoked server-side (e.g. a
+  Redis flush) while the browser still holds the cookie, protected pages
+  will 401 their API calls rather than auto-redirecting to `/login`. Not a
+  security gap (the backend still rejects every call correctly), but a
+  minor UX rough edge, discovered during manual verification.
 
 Test commands:
 ```bash
 # standard suite
-cd backend && python -m pytest tests/api/test_auth.py tests/api/test_route_gating.py tests/unit/test_log_redaction.py tests/api/test_deletion.py -q
+cd backend && python -m pytest tests/api/test_auth.py tests/api/test_route_gating.py tests/unit/test_log_redaction.py tests/workers/test_log_redaction_pipeline.py tests/api/test_deletion.py -q
 cd e2e && npx playwright test specs/auth-deletion.spec.ts
 # on the VPS after deploy:
 curl -fsS https://$APP_DOMAIN/api/health

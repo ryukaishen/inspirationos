@@ -1,0 +1,12 @@
+# Caddy is the only service exposed to the internet (see DEPLOYMENT_PLAN.md).
+# Automatic HTTPS via Let's Encrypt for APP_DOMAIN; HTTP is redirected to
+# HTTPS automatically by Caddy whenever the site address isn't "localhost".
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode gzip
+	reverse_proxy frontend:3000
+}

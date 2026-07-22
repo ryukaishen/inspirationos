@@ -11,9 +11,10 @@ Instagram is the *first* importer behind a `SourceImporter` abstraction; the
 data model supports future sources (GitHub stars, YouTube Watch Later, X
 bookmarks, Reddit saved, …) without schema changes.
 
-> **Status: Milestone 1 (Foundation) implemented.** Monorepo skeleton, compose
-> stack, migrations, health checks, job loop, and CI exist. Implementation
-> proceeds milestone-by-milestone per
+> **Status: Milestones 1-9 implemented.** Import, parsing, inbox, enrichment,
+> AI analysis, project generation, career artifacts, and single-user auth +
+> deletion + private-VPS deployment all exist. Milestone 10 (real-data
+> hardening) remains. Implementation proceeds milestone-by-milestone per
 > [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 ## What it will do
@@ -71,14 +72,20 @@ See [docs/PRIVACY_SECURITY.md](docs/PRIVACY_SECURITY.md).
 ```bash
 cp .env.example .env    # optional — the dev stack runs with built-in dev defaults
 docker compose up --build
+docker compose exec backend python -m app.cli create-user --email you@example.com
 ```
 
-- Frontend: <http://localhost:3000> — system-health card and a demo background
-  job you can watch go `queued → running → succeeded`.
+- Every page requires signing in (M9) — visit <http://localhost:3000>,
+  you'll be redirected to `/login`; sign in with the account you just
+  created.
 - API health: <http://localhost:8000/api/health> (also proxied at
-  `http://localhost:3000/api/health`).
+  `http://localhost:3000/api/health`) — the one route that never requires a
+  session, for uptime monitoring.
 - The backend container applies Alembic migrations on start; the worker
   consumes the `imports` / `enrichment` / `ai` queues.
+- Production deployment (private VPS, HTTPS via Caddy, backups) uses
+  `docker-compose.prod.yml` instead — see
+  [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md).
 
 ### Without Docker (e.g. the current Windows dev box)
 
@@ -99,6 +106,8 @@ npm run lint && npx tsc --noEmit && npm run test -- --run
 npm run dev     # expects the backend on :8000 for live data
 
 # E2E (requires the compose stack; CI runs it on every push/PR)
+docker compose exec backend python -m app.cli create-user \
+  --email e2e@example.com --password e2e-test-password-not-a-secret
 cd e2e
 npm install
 npx playwright test

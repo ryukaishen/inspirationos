@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,9 @@ class JobRead(BaseModel):
     status: JobStatus
     progress: int
     total: int
+    # IDs/scalars/counts only by construction (see DATA_MODEL.md) — the
+    # complete-wipe job's verification report (M9) rides here too.
+    payload: dict[str, Any]
     error: str | None
     created_at: datetime
     started_at: datetime | None

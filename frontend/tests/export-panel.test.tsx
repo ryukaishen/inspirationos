@@ -29,6 +29,7 @@ function makeJob(overrides: Partial<JobRead> = {}): JobRead {
     status: "succeeded",
     progress: 1,
     total: 1,
+    payload: {},
     error: null,
     created_at: "2026-07-20T00:00:00Z",
     started_at: "2026-07-20T00:00:01Z",

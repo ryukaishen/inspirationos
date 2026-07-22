@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AdvisorPanel } from "@/components/projects/advisor-panel";
@@ -10,6 +10,7 @@ import { CareerArtifactsPanel } from "@/components/projects/career-artifacts-pan
 import { ExportPanel } from "@/components/projects/export-panel";
 import { MilestoneEditor } from "@/components/projects/milestone-editor";
 import { ScoreBars } from "@/components/projects/score-bars";
+import { ConfirmDeleteDialog } from "@/components/deletion/confirm-delete-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,7 @@ import {
   ApiError,
   FINISHED_JOB_STATUSES,
   PROJECT_STATUSES,
+  deleteProject,
   getJob,
   getProject,
   regenerateProject,
@@ -34,6 +36,7 @@ function parseList(value: string): string[] {
 
 export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const projectId = Number(params.id);
   const queryClient = useQueryClient();
 
@@ -46,6 +49,7 @@ export default function ProjectDetailPage() {
   const [difficultyDraft, setDifficultyDraft] = useState("");
   const [durationDraft, setDurationDraft] = useState("");
   const [regenerateJobId, setRegenerateJobId] = useState<number | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const detail = useQuery({
     queryKey: ["project", projectId],
@@ -84,6 +88,14 @@ export default function ProjectDetailPage() {
   const regenerate = useMutation({
     mutationFn: () => regenerateProject(projectId),
     onSuccess: (accepted) => setRegenerateJobId(accepted.job_id),
+  });
+
+  const removeProject = useMutation({
+    mutationFn: (confirmText: string) => deleteProject(projectId, confirmText),
+    onSuccess: () => {
+      setDeleteOpen(false);
+      router.push("/projects");
+    },
   });
 
   const regenerateJob = useQuery({
@@ -181,6 +193,14 @@ export default function ProjectDetailPage() {
                   onClick={() => (editing ? setEditing(false) : startEditing())}
                 >
                   {editing ? "Cancel" : "Edit"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  data-testid="project-delete-open"
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  Delete
                 </Button>
               </div>
             </div>
@@ -334,6 +354,24 @@ export default function ProjectDetailPage() {
           <AdvisorPanel projectId={projectId} />
           <CareerArtifactsPanel projectId={projectId} />
           <ExportPanel projectId={projectId} />
+
+          <ConfirmDeleteDialog
+            open={deleteOpen}
+            onOpenChange={setDeleteOpen}
+            title="Delete this project?"
+            description="Removes the project, its milestones, and its artifacts. Any exported bundle files are cleaned up only by a complete data wipe."
+            confirmValue={project.title}
+            onConfirm={() => removeProject.mutate(project.title)}
+            isPending={removeProject.isPending}
+            error={
+              removeProject.error instanceof ApiError
+                ? removeProject.error.message
+                : removeProject.isError
+                  ? "Delete failed."
+                  : null
+            }
+            testIdPrefix="project-delete"
+          />
         </>
       )}
     </main>

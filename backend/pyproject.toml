@@ -20,6 +20,7 @@ dependencies = [
     "numpy>=1.26",
     "anthropic>=0.40",
     "openai>=1.40",
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]

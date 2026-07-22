@@ -39,8 +39,10 @@ from app.queues import QUEUE_IMPORTS
 from app.redis_client import get_redis
 from app.schemas.import_ import ImportDetail, ImportRead, UploadAccepted
 from app.schemas.job import JobRead
+from app.schemas.privacy import ImportDeletionReport, ImportDeletionRequest
 from app.services.ingest.format_detection import ExportKind, detect_export_format
 from app.services.ingest.zip_safety import ZipLimits, ZipRejectedError, validate_zip
+from app.services.privacy.deletion import delete_raw_import
 from app.services.storage.base import Storage
 from app.services.storage.local import LocalStorage
 
@@ -281,4 +283,32 @@ def get_import(import_id: int, db: DbSession) -> ImportDetail:
     return ImportDetail(
         **base.model_dump(),
         latest_job=JobRead.model_validate(latest_job) if latest_job is not None else None,
+    )
+
+
+@router.post("/{import_id}/delete", response_model=ImportDeletionReport)
+def delete_import(
+    import_id: int, body: ImportDeletionRequest, db: DbSession, storage: StorageDep
+) -> ImportDeletionReport:
+    """Typed confirmation: `confirm_text` must exactly match the filename.
+    `cascade=False` keeps derived items with source refs nulled;
+    `cascade=True` deletes them too. Synchronous — bounded work."""
+    import_row = db.get(Import, import_id)
+    if import_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import not found")
+    if body.confirm_text != import_row.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "confirmation_mismatch",
+                "message": "confirmation text does not match the import's filename",
+            },
+        )
+    report = delete_raw_import(db, storage, import_row, cascade=body.cascade)
+    return ImportDeletionReport(
+        conversations_deleted=report.conversations_deleted,
+        messages_deleted=report.messages_deleted,
+        items_deleted=report.items_deleted,
+        items_kept=report.items_kept,
+        file_deleted=report.file_deleted,
     )

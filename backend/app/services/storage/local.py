@@ -47,3 +47,20 @@ class LocalStorage:
 
     def delete(self, key: str) -> None:
         self._path_for(key).unlink(missing_ok=True)
+
+    def _iter_stored_files(self) -> list[Path]:
+        """Every regular file under the root, excluding the spool/tmp dir."""
+        return [
+            path
+            for path in self._root.rglob("*")
+            if path.is_file() and not path.is_relative_to(self._spool)
+        ]
+
+    def clear(self) -> int:
+        files = self._iter_stored_files()
+        for path in files:
+            path.unlink(missing_ok=True)
+        return len(files)
+
+    def count_files(self) -> int:
+        return len(self._iter_stored_files())

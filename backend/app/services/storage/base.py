@@ -29,3 +29,12 @@ class Storage(Protocol):
     def delete(self, key: str) -> None:
         """Remove `key`; deleting a missing key is a no-op (idempotent)."""
         ...
+
+    def clear(self) -> int:
+        """Remove every stored file (used only by the complete-wipe job).
+        Returns the number of files removed."""
+        ...
+
+    def count_files(self) -> int:
+        """Number of files currently stored — the wipe report's post-check."""
+        ...

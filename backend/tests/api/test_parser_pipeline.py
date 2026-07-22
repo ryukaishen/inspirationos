@@ -55,8 +55,10 @@ from app.models.import_ import ExportFormat, Import, ImportStatus
 from app.models.item import DuplicateGroup, DuplicateReason, Item, ItemStatus, ItemType
 from app.models.job import Job, JobKind, JobStatus
 from app.models.message import Message
+from app.models.user import User
 from app.queues import QUEUE_IMPORTS
 from app.redis_client import get_redis
+from app.services.auth.passwords import hash_password
 from app.services.storage.local import LocalStorage
 from app.workers.jobs import run_import_extract, run_import_scan
 
@@ -65,6 +67,10 @@ pytestmark = pytest.mark.integration
 # Dedicated queue: a running dev compose worker also consumes "imports" and
 # must not race this test's SimpleWorker for enqueued extract jobs.
 TEST_QUEUE = f"{QUEUE_IMPORTS}-test-extract"
+
+CSRF_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
+_TEST_USER_EMAIL = "parser-pipeline@example.com"
+_TEST_USER_PASSWORD = "correct-horse-battery-staple"
 
 MakeImport = Callable[..., int]
 
@@ -149,7 +155,10 @@ def make_import(
 def client(pg_engine: Engine, redis_client: Redis) -> Generator[TestClient, None, None]:
     """TestClient over really-committed sessions, so worker tasks (own
     connection) see what the API wrote. Shadows conftest's savepoint client
-    on purpose."""
+    on purpose. Needs its own really-committed user (M9 gates every
+    non-auth route) — created and purged here rather than reusing
+    conftest's savepoint-scoped user, which this file's real commits
+    wouldn't roll back."""
 
     def _session() -> Generator[Session, None, None]:
         with Session(pg_engine, expire_on_commit=False) as session:
@@ -157,11 +166,25 @@ def client(pg_engine: Engine, redis_client: Redis) -> Generator[TestClient, None
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_redis] = lambda: redis_client
+    with Session(pg_engine, expire_on_commit=False) as setup_session:
+        user = User(email=_TEST_USER_EMAIL, password_hash=hash_password(_TEST_USER_PASSWORD))
+        setup_session.add(user)
+        setup_session.commit()
+        user_id = user.id
     try:
         with TestClient(app) as test_client:
+            test_client.headers.update(CSRF_HEADERS)
+            login_response = test_client.post(
+                "/api/auth/login",
+                json={"email": _TEST_USER_EMAIL, "password": _TEST_USER_PASSWORD},
+            )
+            assert login_response.status_code == 200, login_response.text
             yield test_client
     finally:
         app.dependency_overrides.clear()
+        with Session(pg_engine, expire_on_commit=False) as cleanup_session:
+            cleanup_session.execute(delete(User).where(User.id == user_id))
+            cleanup_session.commit()
 
 
 @pytest.fixture
