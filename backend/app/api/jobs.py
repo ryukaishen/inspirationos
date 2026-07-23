@@ -10,6 +10,7 @@ from app.models.job import Job, JobKind, JobStatus
 from app.queues import QUEUE_IMPORTS
 from app.redis_client import get_redis
 from app.schemas.job import DemoJobRequest, JobRead
+from app.services.jobs import reconcile_stale_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -52,4 +53,4 @@ def get_job(job_id: int, db: DbSession) -> Job:
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
-    return job
+    return reconcile_stale_job(db, job)

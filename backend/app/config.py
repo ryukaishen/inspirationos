@@ -46,6 +46,17 @@ class AppConfig(BaseSettings):
     # concatenated into the item's adjacent_text (see services/ingest/instagram/).
     adjacent_text_window_seconds: int = 120
 
+    # A worker that crashes hard (OOM-kill, host reboot, container crash —
+    # not a clean exception) leaves its in-flight `jobs` row stuck at
+    # `running` forever; nothing else notices, since RQ's own dead-worker
+    # bookkeeping never writes back to this table. Any read of a `running`
+    # job past this age is reconciled to `failed` in place (see
+    # services/jobs.py::reconcile_stale_job) — generous enough not to
+    # false-positive on legitimately slow batches (large enrichment runs,
+    # a first-time local-embedding-model download) while still bounding
+    # "stuck forever" to a concrete, visible window.
+    job_stale_after_seconds: int = 1800
+
     # Metadata enrichment (off by default; consent-gated in Settings — see
     # services/enrichment/). Ceilings/defaults only, not the on/off switch.
     enrichment_requests_per_minute: int = 20

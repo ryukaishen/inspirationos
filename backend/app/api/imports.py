@@ -43,6 +43,7 @@ from app.schemas.privacy import ImportDeletionReport, ImportDeletionRequest
 from app.services.ingest.format_detection import ExportKind, detect_export_format
 from app.services.ingest.verification import build_verification_report
 from app.services.ingest.zip_safety import ZipLimits, ZipRejectedError, validate_zip
+from app.services.jobs import reconcile_stale_job
 from app.services.privacy.deletion import delete_raw_import
 from app.services.storage.base import Storage
 from app.services.storage.local import LocalStorage
@@ -281,6 +282,8 @@ def get_import(import_id: int, db: DbSession) -> ImportDetail:
         )
         .order_by(Job.id.desc())
     ).first()
+    if latest_job is not None:
+        latest_job = reconcile_stale_job(db, latest_job)
     base = ImportRead.model_validate(import_row)
     return ImportDetail(
         **base.model_dump(),

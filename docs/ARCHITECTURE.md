@@ -109,19 +109,26 @@ inspiration-os/
 - Every enqueue first creates a `jobs` row; the task updates
   status/progress/total as it runs. Frontend polls `GET /api/jobs/{id}`.
 - **Recoverability:** exception-raising job failures are caught by each task
-  and recorded in the `jobs` row (redacted error) — no automatic retry is
-  actually wired up (**correction, 2026-07-23, see
-  docs/REAL_DATA_VERIFICATION.md**: no `.enqueue()` call anywhere passes
-  `retry=Retry(...)` or a custom `job_timeout`, despite this section
-  previously claiming `Retry(max=3, interval=[10, 60, 300])` and a "Retry
-  button in UI" — neither exists; `cli.py requeue-failed` was likewise never
-  implemented, per M9's own note above). Worse, a **hard worker crash**
-  mid-job (OOM-kill, host reboot, container crash — not a clean exception)
-  leaves that job stuck at `status=running` **permanently**, confirmed for
-  6+ minutes across multiple worker restarts in a live drill — there is
-  currently no automated recovery and no UI/CLI path to retry or cancel a
-  stuck job. A graceful restart (`docker compose restart worker`, SIGTERM)
-  is unaffected: RQ's warm shutdown finishes the in-flight job first.
+  and recorded in the `jobs` row (redacted error) — no `.enqueue()` call
+  passes RQ's `retry=Retry(...)` or a custom `job_timeout`, so an ordinary
+  exception fails a job once with no automatic re-attempt (a docs claim of
+  `Retry(max=3, interval=[10, 60, 300])` here was inaccurate — corrected
+  2026-07-23; `cli.py requeue-failed` was likewise never implemented, per
+  M9's own note above). A **hard worker crash** mid-job (OOM-kill, host
+  reboot, container crash — not a clean exception, and not the same as a
+  graceful `docker compose restart worker`, whose SIGTERM lets RQ's warm
+  shutdown finish the in-flight job first) leaves that row stuck at
+  `status=running` with nothing else to notice, since RQ's own dead-worker
+  bookkeeping is internal to Redis and never writes back to this table —
+  confirmed for 6+ minutes across multiple worker restarts in a live drill.
+  Fixed by **lazy staleness reconciliation** rather than a separate
+  always-on scheduler process: `services/jobs.py::reconcile_stale_job` runs
+  on every read of a job (`GET /api/jobs/{id}`, and the `latest_job` lookup
+  inside `GET /api/imports/{id}`) and flips a `running` job older than
+  `AppConfig.job_stale_after_seconds` (1800s default) to `failed` with
+  `error="JobStalledError"`, in place — the same expiry-on-read pattern
+  session/cache TTLs commonly use, so every existing job-polling surface in
+  the frontend self-heals with no new UI.
 - **Idempotency:** tasks operate on IDs and upsert by natural key (items by
   shortcode/canonical URL; embeddings by item+model) — a crashed-and-retried
   job never duplicates data.
