@@ -340,29 +340,43 @@ curl -fsS https://$APP_DOMAIN/api/health
 
 ## Milestone 10 — Real-Data Hardening
 
+**Status: implementation complete; real-export validation pending.** No
+real Instagram export exists in the environment this milestone was
+implemented in, and per hard constraint none may be fetched, requested, or
+fabricated — see TESTING_STRATEGY.md's "Real-data workflow" for the manual
+runbook the user runs afterward with their own file. Every box below that
+depends on the real export is left unchecked on purpose; everything
+buildable and testable against synthetic fixtures (including the
+5,000-message performance benchmark, which the perf targets are defined
+against directly, not just the real export) is implemented, tested, and
+was executed in this session.
+
 **Goal:** the app works reliably with Adam's actual export at real scale.
 
 Scope:
-- [ ] Run the real export locally per TESTING_STRATEGY.md real-data workflow.
-- [ ] Parser tolerance fixes for real-world JSON variations — **each with a new synthetic fixture** reproducing it.
-- [ ] Import-verification report UI: parsed counts vs. raw ZIP scan counts; every skipped entry categorized, none silent.
-- [ ] Verify duplicate detection on real repeat shares.
-- [ ] Verify all deletion scopes on a real-data copy.
-- [ ] Performance pass: 5k-message fixture benchmark + real export (targets: scan < 1 min, extract < 3 min for ~5k messages, inbox p95 API < 300 ms).
-- [ ] Only after all above: optionally load real data on the VPS.
+- [ ] Run the real export locally per TESTING_STRATEGY.md real-data workflow. — pending (needs the real file; runbook documented)
+- [x] Parser tolerance fixes for real-world JSON variations — **each with a new synthetic fixture** reproducing it. Scope for this session: (1) every scan-pass skip is now categorized and counted instead of silently dropped (`ScanIssues`, `services/ingest/instagram/export_reader.py`); (2) known Meta thread categories beyond `inbox` (`message_requests`/`filtered_threads`/`archived_threads`) are now parsed, not invisible. Both are defensive tolerance for *documented* export-format facts, not fixes for quirks observed in a real file — any *additional* variation the real run surfaces still needs its own fixture+test afterward.
+- [x] Import-verification report UI: parsed counts vs. raw ZIP scan counts; every skipped entry categorized, none silent. `GET /api/imports/{id}/verification` (`services/ingest/verification.py`) + the import detail page's "Verification report" card; tested against a purpose-built fixture (`build_verification_export_zip`) exercising every skip category and a duplicate pair.
+- [ ] Verify duplicate detection on real repeat shares. — the duplicate-summary mechanism is built and tested against synthetic duplicates; real spot-check pending.
+- [ ] Verify all deletion scopes on a real-data copy. — deletion scopes were already implemented and tested in M9; the real-data-copy drill procedure is documented (reusing the M9 backup/restore scratch-project pattern) but not executed (no real data exists here).
+- [x] / [ ] Performance pass: 5k-message fixture benchmark + real export (targets: scan < 1 min, extract < 3 min for ~5k messages, inbox p95 API < 300 ms). Synthetic-fixture leg **done and run this session** (`backend/scripts/benchmark_import.py` against `fixture_builder.build_perf_export_zip`); real-export leg pending.
+- [ ] Only after all above: optionally load real data on the VPS. — pending (blocked on everything above).
 
 Acceptance criteria:
-- [ ] Real export imports with zero unhandled parse errors.
-- [ ] Verification report link count within explained tolerance of raw count.
-- [ ] Duplicate spot-checks correct on real repeats.
-- [ ] Complete wipe verified on a real-data copy.
-- [ ] Perf targets met on the 5k fixture via the benchmark script.
-- [ ] Every real-world quirk that changed code has a committed synthetic fixture + test.
+- [ ] Real export imports with zero unhandled parse errors. — pending, needs the real file.
+- [ ] Verification report link count within explained tolerance of raw count. — mechanism built + tested on synthetic data; real comparison pending.
+- [ ] Duplicate spot-checks correct on real repeats. — mechanism built + tested on synthetic duplicates; real spot-check pending.
+- [ ] Complete wipe verified on a real-data copy. — deletion scopes tested (M9); real-copy drill documented, not executed.
+- [x] Perf targets met on the 5k fixture via the benchmark script. — run this session: scan 0.22s (< 60s), extract 22.72s (< 180s), inbox p95 32.7ms (< 300ms), all PASS. (The "+ real export" half of the scope line above stays pending.)
+- [ ] Every real-world quirk that changed code has a committed synthetic fixture + test. — true for everything changed this session (see the two fixes above); any further quirk found in the real run needs the same treatment afterward.
 
 Test commands:
 ```bash
 # standard suite
-cd backend && python -m pytest -q                       # entire suite, including new quirk fixtures
-cd backend && python scripts/benchmark_import.py        # prints timings; must meet targets
-cd e2e && npx playwright test                           # full critical path
+cd backend && python -m ruff format . && python -m ruff check --fix .
+cd backend && python -m mypy app
+cd backend && python -m pytest -q                       # entire suite, including new quirk fixtures — 411 passed, 3 skipped (pre-existing, unrelated)
+cd frontend && npm run lint && npx tsc --noEmit && npm run test -- --run
+cd backend && python scripts/benchmark_import.py --email <existing-account>   # prints timings; must meet targets
+cd e2e && npx playwright test                           # full critical path, including specs/verification.spec.ts
 ```

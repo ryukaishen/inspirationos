@@ -171,14 +171,66 @@ A milestone is complete only when CI is green.
 
 ## Real-data workflow (M10; safety rules apply before then too)
 
-1. Place the real export ZIP under gitignored `var/` only.
-2. Run the full pipeline **locally** (never on the VPS first) with
-   `AI_PROVIDER=mock` initially.
-3. Compare the import-verification report (parsed counts vs. raw ZIP scan
-   counts); investigate every category of skipped entry — none may be silent.
-4. Spot-check duplicate groups against known repeat shares.
-5. Exercise all three deletion scopes on a copy and verify the reports.
-6. Only after local verification, optionally load real data into the VPS
-   deployment.
-7. Any parser change motivated by real data ships with a synthetic fixture
-   reproducing the quirk.
+This workflow is a manual runbook — an AI coding session must never execute
+it (never access, request, or fabricate the real export; see
+PRIVACY_SECURITY.md). Everything it depends on (verification report,
+skip-categorized parser tolerance, the 5k-message performance benchmark) is
+built and tested against synthetic fixtures only; this section is what a
+human operator runs afterward, locally, with their own file.
+
+**Synthetic vs. real-data results are always reported separately** — a
+synthetic-fixture pass (automated, reproducible, safe to state in git
+history/PRs) is not evidence that the real-export criteria below have been
+met, and vice versa.
+
+1. Place the real export ZIP under gitignored `var/` only — e.g.
+   `var/private/<export>.zip` (`var/` is fully gitignored; confirm with
+   `git check-ignore var/private/<export>.zip`, which should print the path).
+   Never `git add` it, even accidentally.
+2. Start the stack locally (never the VPS first) with the default
+   `AI_PROVIDER=mock`:
+   ```bash
+   docker compose up -d
+   docker compose exec backend python -m app.cli create-user \
+     --email you@example.com   # skip if already seeded
+   ```
+   Open the app, log in, and use the **Import** screen to upload the ZIP —
+   upload/scan/extract are fully offline regardless of the AI provider
+   setting (see PRIVACY_SECURITY.md's network policy).
+3. On the import detail page, read the **Verification report** section
+   (`GET /api/imports/{id}/verification`): raw-vs-matched message-JSON
+   counts, every skip category with a count and description, and — after
+   selecting conversations and extracting — the duplicate-group summary by
+   reason. Every category must be individually explained (a nonzero
+   `unrecognized_message_path` count names the unrecognized directory —
+   investigate what it is before treating the import as complete); none may
+   be silently ignored.
+4. Spot-check duplicate groups against known repeat shares: the
+   verification report's per-reason counts are the aggregate signal: open
+   the Inbox and look at the grouped cards (M4) for a sample of groups to
+   confirm they're genuinely the same content.
+5. Exercise all three deletion scopes **on a copy**, never the primary
+   real-data stack, reusing the M9 backup/restore scratch-project pattern
+   so a mistake can never touch the only copy:
+   ```bash
+   docker compose exec backend bash /app/scripts/backup.sh   # or your local equivalent
+   docker compose -p inspiration-real-data-drill -f docker-compose.prod.yml \
+     up -d postgres redis backend worker
+   backend/scripts/restore.sh <db-backup> <data-backup>       # into the drill project
+   # exercise raw-import deletion, project deletion, and the complete wipe
+   # through that drill stack's UI/API; verify each report matches reality
+   docker compose -p inspiration-real-data-drill -f docker-compose.prod.yml down -v
+   ```
+6. Performance sanity check: run the automated synthetic benchmark first
+   (`cd backend && python scripts/benchmark_import.py`, targets: scan < 60s,
+   extract < 180s, inbox p95 < 300ms — this step needs no real data and can
+   run any time). Then, separately, note the real import's actual scan/
+   extract durations from the Jobs UI as an informal real-world sanity
+   check against the same targets — not a scripted pass/fail, since a real
+   export's size and content mix aren't controlled like the fixture's.
+7. Only after all of the above, optionally load real data into the VPS
+   deployment (see DEPLOYMENT_PLAN.md's "Real data on production").
+8. Any parser change motivated by something found in the real run ships
+   with a new synthetic fixture in `backend/tests/fixture_builder.py`
+   reproducing the quirk, plus a test — never a fix justified only by "I saw
+   this in my real export."

@@ -85,8 +85,10 @@ from app.services.generation.projects import (
 )
 from app.services.ingest.format_detection import count_message_json_files
 from app.services.ingest.instagram.export_reader import (
+    ScanIssues,
     iter_threads,
     read_owner_name,
+    scan_unrecognized_message_paths,
     thread_entries,
 )
 from app.services.ingest.instagram.parser import (
@@ -188,13 +190,15 @@ def run_import_scan(job_id: int, import_id: int) -> None:
 
             storage = LocalStorage(get_config().data_dir)
             summaries: list[ConversationSummary] = []
+            issues = ScanIssues()
             with storage.open(import_row.storage_key) as fh, zipfile.ZipFile(fh) as archive:
                 entry_names = archive.namelist()
                 personal_name = read_owner_name(archive)
                 job.total = len(thread_entries(archive))
                 session.commit()
+                scan_unrecognized_message_paths(entry_names, issues)
                 # One thread's messages in memory at a time; only summaries kept.
-                for thread in iter_threads(archive):
+                for thread in iter_threads(archive, issues):
                     summaries.append(summarize_thread(thread))
                     job.progress += 1
                     session.commit()
@@ -230,6 +234,8 @@ def run_import_scan(job_id: int, import_id: int) -> None:
                 "conversations": len(summaries),
                 "messages": sum(s.message_count for s in summaries),
                 "links": sum(s.link_count for s in summaries),
+                # M10: every scan-pass skip, categorized — see verification.py
+                "skipped": issues.as_dict(),
             }
             import_row.status = ImportStatus.scanned
             job.status = JobStatus.succeeded

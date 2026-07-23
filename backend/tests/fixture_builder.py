@@ -290,6 +290,178 @@ def build_cluster_export_zip(path: Path, unique: str = "") -> Path:
     return path
 
 
+# --- verification/skip-categorization export fixture (Milestone 10) --------
+#
+# Exercises every M10 scan-pass skip category exactly once, Meta's other
+# known message-thread categories (message_requests/filtered_threads), an
+# unrecognized category, and an exact-shortcode duplicate pair. Kept separate
+# from the M3 rich fixture so its existing count assertions never shift.
+
+VERIFICATION_DUP_THREAD_DIR = "syntheticverifydup_1000000001"
+VERIFICATION_MALFORMED_THREAD_DIR = "syntheticverifymalformed_2000000002"
+VERIFICATION_REQUESTS_THREAD_DIR = "syntheticverifyrequests_3000000003"
+VERIFICATION_FILTERED_THREAD_DIR = "syntheticverifyfiltered_4000000004"
+VERIFICATION_UNKNOWN_CATEGORY = "synthetic_unknown_category"
+VERIFICATION_UNKNOWN_THREAD_DIR = "syntheticverifyunknown_5000000005"
+
+VERIFICATION_DUP_URL = "https://www.instagram.com/reel/SYNTHVER001/"
+VERIFICATION_DUP_SHORTCODE = "SYNTHVER001"
+
+# Expected verification-report numbers, asserted exactly by tests.
+VERIFICATION_TOTAL_ENTRIES = (
+    7  # 6 message_N.json files (incl. the unknown-category one) + personal_information.json
+)
+VERIFICATION_MESSAGE_FILES = (
+    5  # matched known categories only: dup(2) + malformed(1) + requests(1) + filtered(1)
+)
+VERIFICATION_CONVERSATIONS = (
+    4  # dup + malformed + requests + filtered (unknown category is not a conversation)
+)
+VERIFICATION_MESSAGES_PARSED = 6  # 3 (dup) + 1 (malformed) + 1 (requests) + 1 (filtered)
+VERIFICATION_NON_DICT_PAGE_PAYLOAD = 1
+VERIFICATION_MESSAGE_NOT_OBJECT = 1
+VERIFICATION_MESSAGE_MISSING_FIELDS = 2
+VERIFICATION_UNRECOGNIZED_MESSAGE_PATH = 1
+VERIFICATION_DUPLICATE_GROUP_SIZE = 2
+
+
+def build_verification_export_zip(path: Path, unique: str = "") -> Path:
+    """Current-layout export exercising every M10 skip category once, plus
+    the message_requests/filtered_threads categories, an unrecognized
+    category, and an exact-shortcode duplicate pair."""
+    dup_messages = [
+        _rich_message(
+            FRIEND_NAME, 0, share={"link": VERIFICATION_DUP_URL, "share_text": "first share"}
+        ),
+        _rich_message(OWNER_NAME, 60, content=f"Synthetic middle text {unique}".strip()),
+        _rich_message(
+            FRIEND_NAME, 120, share={"link": VERIFICATION_DUP_URL, "share_text": "second share"}
+        ),
+    ]
+    # One valid message plus every M10 per-message skip shape: a non-object
+    # array entry, a message missing timestamp_ms, a message missing sender_name.
+    malformed_messages: list[Any] = [
+        _rich_message(OWNER_NAME, 0, content="valid malformed-thread message"),
+        "not an object",
+        {"sender_name": OWNER_NAME, "content": "missing timestamp"},
+        {"timestamp_ms": RICH_BASE_MS, "content": "missing sender"},
+    ]
+    requests_messages = [_rich_message(FRIEND_NAME, 0, content="synthetic message request text")]
+    filtered_messages = [_rich_message(FRIEND_NAME, 0, content="synthetic filtered thread text")]
+    unknown_messages = [_rich_message(FRIEND_NAME, 0, content="synthetic unknown-category text")]
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/inbox/{VERIFICATION_DUP_THREAD_DIR}/message_1.json",
+            _rich_page(
+                "Verify Dup",
+                [OWNER_NAME, FRIEND_NAME],
+                VERIFICATION_DUP_THREAD_DIR,
+                list(reversed(dup_messages)),
+            ),
+        )
+        # Non-dict page payload: valid JSON, but an array, not an object.
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/inbox/{VERIFICATION_DUP_THREAD_DIR}/message_2.json",
+            b"[]",
+        )
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/inbox/{VERIFICATION_MALFORMED_THREAD_DIR}/message_1.json",
+            _rich_page(
+                "Verify Malformed",
+                [OWNER_NAME, FRIEND_NAME],
+                VERIFICATION_MALFORMED_THREAD_DIR,
+                malformed_messages,
+            ),
+        )
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/message_requests/{VERIFICATION_REQUESTS_THREAD_DIR}/message_1.json",
+            _rich_page(
+                "Verify Requests",
+                [OWNER_NAME, FRIEND_NAME],
+                VERIFICATION_REQUESTS_THREAD_DIR,
+                requests_messages,
+            ),
+        )
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/filtered_threads/{VERIFICATION_FILTERED_THREAD_DIR}/message_1.json",
+            _rich_page(
+                "Verify Filtered",
+                [OWNER_NAME, FRIEND_NAME],
+                VERIFICATION_FILTERED_THREAD_DIR,
+                filtered_messages,
+            ),
+        )
+        # Unrecognized category: a message_N.json shape under messages/<X>/
+        # where <X> isn't inbox/message_requests/filtered_threads/archived_threads.
+        zf.writestr(
+            f"{VARIANT_A_MESSAGES_PREFIX}/{VERIFICATION_UNKNOWN_CATEGORY}/"
+            f"{VERIFICATION_UNKNOWN_THREAD_DIR}/message_1.json",
+            _rich_page(
+                "Verify Unknown",
+                [OWNER_NAME, FRIEND_NAME],
+                VERIFICATION_UNKNOWN_THREAD_DIR,
+                unknown_messages,
+            ),
+        )
+        zf.writestr("personal_information/personal_information.json", _personal_information_json())
+    return path
+
+
+# --- performance export fixture (Milestone 10) ------------------------------
+#
+# Built **on demand only** — deliberately not part of `main()`'s default
+# output, so it never slows the e2e fixture-generation step. Used by
+# `backend/scripts/benchmark_import.py` (imported directly) and, for manual
+# use, the `--perf-messages`/`--perf-out` CLI flags below.
+
+PERF_THREAD_COUNT = 20
+
+
+def build_perf_export_zip(path: Path, *, message_count: int = 5000, unique: str = "") -> Path:
+    """Current-layout export with ~`message_count` messages spread across
+    `PERF_THREAD_COUNT` threads: a realistic share/plain-text/occasional-
+    duplicate mix for the M10 scan/extract/inbox-API performance benchmark."""
+    per_thread = max(message_count // PERF_THREAD_COUNT, 1)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for thread_index in range(PERF_THREAD_COUNT):
+            thread_dir = f"syntheticperf{thread_index}_{unique or '0'}"
+            messages: list[dict[str, Any]] = []
+            for message_index in range(per_thread):
+                offset = message_index * 5
+                sender = FRIEND_NAME if message_index % 2 == 0 else OWNER_NAME
+                if message_index % 4 == 0:
+                    # Repeats a shortcode every 20 shares for a realistic,
+                    # bounded rate of "shared again" duplicates.
+                    shortcode = f"PERF{thread_index:03d}{(message_index // 4) % 20:03d}"
+                    link = f"https://www.instagram.com/reel/{shortcode}/"
+                    share_text = f"Synthetic perf share {thread_index}-{message_index}"
+                    messages.append(
+                        _rich_message(
+                            sender, offset, share={"link": link, "share_text": share_text}
+                        )
+                    )
+                else:
+                    messages.append(
+                        _rich_message(
+                            sender,
+                            offset,
+                            content=f"Synthetic perf message {thread_index}-{message_index}",
+                        )
+                    )
+            zf.writestr(
+                f"{VARIANT_A_MESSAGES_PREFIX}/inbox/{thread_dir}/message_1.json",
+                _rich_page(
+                    f"Perf Thread {thread_index}",
+                    [OWNER_NAME, FRIEND_NAME],
+                    thread_dir,
+                    list(reversed(messages)),
+                ),
+            )
+        zf.writestr("personal_information/personal_information.json", _personal_information_json())
+    return path
+
+
 def build_html_export_zip(path: Path) -> Path:
     """HTML-format export — must be rejected with the "re-request as JSON" message."""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -371,6 +543,18 @@ def main(argv: list[str] | None = None) -> None:
         default="",
         help="marker mixed into message text so each run's ZIPs get distinct checksums",
     )
+    parser.add_argument(
+        "--perf-messages",
+        type=int,
+        default=None,
+        help="also build a ~N-message perf fixture (M10) — not part of the default set",
+    )
+    parser.add_argument(
+        "--perf-out",
+        type=Path,
+        default=None,
+        help="output path for the perf fixture (defaults to <out>/perf.zip)",
+    )
     args = parser.parse_args(argv)
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -393,6 +577,12 @@ def main(argv: list[str] | None = None) -> None:
     build_not_a_zip(out / "not_a_zip.zip")
     build_empty_zip(out / "empty.zip")
     build_unrecognized_zip(out / "unrecognized.zip")
+    # M10: verification.spec.ts uploads this to exercise the verification report.
+    build_verification_export_zip(out / "verification.zip", unique=args.unique)
+    if args.perf_messages is not None:
+        perf_out = args.perf_out or (out / "perf.zip")
+        build_perf_export_zip(perf_out, message_count=args.perf_messages, unique=args.unique)
+        print(f"perf fixture ({args.perf_messages} messages) written to {perf_out}")
     print(f"synthetic fixtures written to {out}")
 
 

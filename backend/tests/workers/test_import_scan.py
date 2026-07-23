@@ -8,7 +8,21 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
-from fixture_builder import FRIEND_NAME, OWNER_NAME, build_variant_a_zip
+from fixture_builder import (
+    FRIEND_NAME,
+    OWNER_NAME,
+    VERIFICATION_CONVERSATIONS,
+    VERIFICATION_MESSAGE_FILES,
+    VERIFICATION_MESSAGE_MISSING_FIELDS,
+    VERIFICATION_MESSAGE_NOT_OBJECT,
+    VERIFICATION_MESSAGES_PARSED,
+    VERIFICATION_NON_DICT_PAGE_PAYLOAD,
+    VERIFICATION_TOTAL_ENTRIES,
+    VERIFICATION_UNKNOWN_CATEGORY,
+    VERIFICATION_UNRECOGNIZED_MESSAGE_PATH,
+    build_variant_a_zip,
+    build_verification_export_zip,
+)
 from redis import Redis
 from rq import Queue, SimpleWorker
 from sqlalchemy import Engine, delete, select
@@ -133,6 +147,13 @@ def test_scan_reaches_scanned_with_conversation_summaries(
         "conversations": 1,
         "messages": 2,
         "links": 2,
+        "skipped": {
+            "non_dict_page_payload": 0,
+            "message_not_object": 0,
+            "message_missing_sender_or_timestamp": 0,
+            "unrecognized_message_path": 0,
+            "unrecognized_message_path_categories": [],
+        },
     }
 
     with Session(pg_engine) as session:
@@ -145,6 +166,50 @@ def test_scan_reaches_scanned_with_conversation_summaries(
         assert conversation.link_count == 2
         assert conversation.is_self_dm_candidate is False
         assert conversation.is_selected is False
+
+
+def test_scan_records_skip_categories_and_known_non_inbox_threads(
+    make_import: MakeImport,
+    scan_storage: LocalStorage,
+    imports_queue: Queue,
+    redis_client: Redis,
+    pg_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    """M10: nothing the scan pass skips is silent — every category lands in
+    `Import.counts["skipped"]`, and message_requests/filtered_threads threads
+    are scanned like inbox."""
+    archive = build_verification_export_zip(tmp_path / "verification.zip")
+    scan_storage.save_file("imports/test-verification.zip", archive)
+    job_id, import_id = make_import("imports/test-verification.zip")
+
+    imports_queue.enqueue("app.workers.jobs.run_import_scan", job_id, import_id)
+    SimpleWorker([imports_queue], connection=redis_client).work(burst=True)
+
+    job, import_row = _reload(pg_engine, job_id, import_id)
+    assert job.status is JobStatus.succeeded
+    assert import_row.status is ImportStatus.scanned
+    assert import_row.counts["total_entries"] == VERIFICATION_TOTAL_ENTRIES
+    assert import_row.counts["message_files"] == VERIFICATION_MESSAGE_FILES
+    assert import_row.counts["conversations"] == VERIFICATION_CONVERSATIONS
+    assert import_row.counts["messages"] == VERIFICATION_MESSAGES_PARSED
+    assert import_row.counts["skipped"] == {
+        "non_dict_page_payload": VERIFICATION_NON_DICT_PAGE_PAYLOAD,
+        "message_not_object": VERIFICATION_MESSAGE_NOT_OBJECT,
+        "message_missing_sender_or_timestamp": VERIFICATION_MESSAGE_MISSING_FIELDS,
+        "unrecognized_message_path": VERIFICATION_UNRECOGNIZED_MESSAGE_PATH,
+        "unrecognized_message_path_categories": [VERIFICATION_UNKNOWN_CATEGORY],
+    }
+
+    with Session(pg_engine) as session:
+        thread_paths = set(
+            session.scalars(
+                select(Conversation.thread_path).where(Conversation.import_id == import_id)
+            )
+        )
+    assert any(path.startswith("message_requests/") for path in thread_paths)
+    assert any(path.startswith("filtered_threads/") for path in thread_paths)
+    assert not any(VERIFICATION_UNKNOWN_CATEGORY in path for path in thread_paths)
 
 
 def test_scan_failure_records_redacted_error_on_both_rows(

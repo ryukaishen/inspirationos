@@ -40,7 +40,18 @@ from fixture_builder import (
     RICH_SELF_MESSAGE_COUNT,
     RICH_SELF_THREAD_PATH,
     RICH_SHARE_TEXT,
+    VERIFICATION_CONVERSATIONS,
+    VERIFICATION_DUP_SHORTCODE,
+    VERIFICATION_DUPLICATE_GROUP_SIZE,
+    VERIFICATION_MESSAGE_FILES,
+    VERIFICATION_MESSAGE_MISSING_FIELDS,
+    VERIFICATION_MESSAGE_NOT_OBJECT,
+    VERIFICATION_MESSAGES_PARSED,
+    VERIFICATION_NON_DICT_PAGE_PAYLOAD,
+    VERIFICATION_UNKNOWN_CATEGORY,
+    VERIFICATION_UNRECOGNIZED_MESSAGE_PATH,
     build_rich_export_zip,
+    build_verification_export_zip,
 )
 from redis import Redis
 from rq import Queue, SimpleWorker
@@ -255,6 +266,13 @@ def test_scan_persists_summaries_and_no_message_bodies(
             "conversations": 2,
             "messages": RICH_FRIEND_MESSAGE_COUNT + RICH_SELF_MESSAGE_COUNT,
             "links": RICH_FRIEND_LINK_COUNT + RICH_SELF_LINK_COUNT,
+            "skipped": {
+                "non_dict_page_payload": 0,
+                "message_not_object": 0,
+                "message_missing_sender_or_timestamp": 0,
+                "unrecognized_message_path": 0,
+                "unrecognized_message_path_categories": [],
+            },
         }
         # privacy invariant: the scan pass persisted zero message bodies/items
         conversation_ids = [c["id"] for c in conversations]
@@ -583,3 +601,97 @@ def test_selection_queue_failure_marks_job_failed(
         assert job is not None
         assert job.status is JobStatus.failed
         assert job.error == "ConnectionError"  # class name only
+
+
+# --- verification report (M10) ------------------------------------------------
+
+
+def test_verification_report_before_scan_is_zeroed(
+    make_import: MakeImport, client: TestClient, tmp_path: Path
+) -> None:
+    """The endpoint never errors before a scan has run — it just reports
+    zeros/empties, since `Import.counts` starts empty."""
+    import_id = make_import(build_rich_export_zip(tmp_path / "unscanned.zip"), scan=False)
+    response = client.get(f"/api/imports/{import_id}/verification")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["conversations_found"] == 0
+    assert body["messages_parsed"] == 0
+    assert body["extracted_messages"] is None
+    assert body["items_extracted"] is None
+    assert body["duplicate_summary"] == []
+
+
+def test_verification_report_unknown_import_404s(client: TestClient) -> None:
+    assert client.get("/api/imports/999999999/verification").status_code == 404
+
+
+def test_verification_report_after_scan_categorizes_every_skip(
+    make_import: MakeImport, client: TestClient, tmp_path: Path
+) -> None:
+    """M10 acceptance: raw-vs-parsed counts and every skip category are
+    visible through the API — nothing silent."""
+    import_id = make_import(build_verification_export_zip(tmp_path / "verification.zip"))
+
+    response = client.get(f"/api/imports/{import_id}/verification")
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["matched_message_json_entries"] == VERIFICATION_MESSAGE_FILES
+    assert body["raw_message_json_entries"] == (
+        VERIFICATION_MESSAGE_FILES + VERIFICATION_UNRECOGNIZED_MESSAGE_PATH
+    )
+    assert body["conversations_found"] == VERIFICATION_CONVERSATIONS
+    assert body["messages_parsed"] == VERIFICATION_MESSAGES_PARSED
+    assert body["messages_skipped"] == (
+        VERIFICATION_MESSAGE_NOT_OBJECT + VERIFICATION_MESSAGE_MISSING_FIELDS
+    )
+    assert body["extracted_messages"] is None  # not extracted yet
+    assert body["items_extracted"] is None
+
+    skip_by_category = {row["category"]: row["count"] for row in body["skip_breakdown"]}
+    assert skip_by_category["non_dict_page_payload"] == VERIFICATION_NON_DICT_PAGE_PAYLOAD
+    assert skip_by_category["message_not_object"] == VERIFICATION_MESSAGE_NOT_OBJECT
+    assert (
+        skip_by_category["message_missing_sender_or_timestamp"]
+        == VERIFICATION_MESSAGE_MISSING_FIELDS
+    )
+    assert skip_by_category["unrecognized_message_path"] == VERIFICATION_UNRECOGNIZED_MESSAGE_PATH
+    unrecognized_row = next(
+        row
+        for row in body["skip_breakdown"]
+        if row["category"] == "unrecognized_message_path_categories_seen"
+    )
+    assert VERIFICATION_UNKNOWN_CATEGORY in unrecognized_row["description"]
+
+    # no message content anywhere in the response
+    assert "share_text" not in response.text
+    assert "adjacent_text" not in response.text
+
+
+def test_verification_report_after_extract_includes_duplicate_summary(
+    make_import: MakeImport,
+    client: TestClient,
+    redis_client: Redis,
+    extract_queue: Queue,
+    tmp_path: Path,
+) -> None:
+    import_id = make_import(build_verification_export_zip(tmp_path / "verification.zip"))
+    conversation_ids = [c["id"] for c in _conversations(client, import_id)]
+    _select_and_extract(client, redis_client, extract_queue, import_id, conversation_ids)
+
+    response = client.get(f"/api/imports/{import_id}/verification")
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["extracted_messages"] == VERIFICATION_MESSAGES_PARSED
+    assert body["duplicate_summary"] == [
+        {
+            "reason": "same_shortcode",
+            "group_count": 1,
+            "item_count": VERIFICATION_DUPLICATE_GROUP_SIZE,
+        }
+    ]
+    # the duplicate summary is counts-by-reason only — no canonical URL or
+    # shortcode is ever surfaced by this endpoint
+    assert VERIFICATION_DUP_SHORTCODE not in response.text

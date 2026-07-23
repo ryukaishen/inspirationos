@@ -86,6 +86,26 @@ code and all future sessions; they take precedence over convenience.
 - `ai_requests` stores tokens, cost, latency, status — never content.
 - Optional Sentry (self-hosted-friendly) behind an env flag with scrubbing on.
 
+## Import verification and performance benchmark (M10)
+
+- The import-verification report (`GET /api/imports/{id}/verification`)
+  surfaces only counts, static per-category descriptions, and structural
+  path segments (a handful of unrecognized `messages/<category>/` directory
+  *names*) — never `share_text`/`adjacent_text`/`context_note` or any other
+  message content. Its duplicate-group summary is counts **by reason**
+  only (`same_shortcode`/`same_canonical_url`/`near_text` group/item
+  counts) — no canonical URLs or timestamps; inspecting an individual group
+  stays the existing Inbox grouped-card UI (M4).
+- `backend/scripts/benchmark_import.py` runs only against the synthetic
+  perf fixture, never a real export; it prints counts and timings only,
+  never message content, and never creates or deletes user accounts (an
+  existing seeded account's email/password must be supplied).
+- The real-data workflow itself (TESTING_STRATEGY.md) is a manual runbook a
+  human operator runs locally with their own file — an AI coding session
+  must never fetch, request, or fabricate a real Instagram export, and must
+  never mark a real-data-dependent acceptance criterion as passed without
+  it actually having been run.
+
 ## Career artifacts and export (M8)
 
 - Career-artifact `content_md`/`payload` are generated text derived from a

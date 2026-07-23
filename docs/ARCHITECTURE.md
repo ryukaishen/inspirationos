@@ -717,3 +717,68 @@ topology auditable in one place.
   matched exactly. Caddy/TLS themselves aren't exercisable in a local
   drill (no real domain), so that part of the deploy path is verified by
   inspection and the `Caddyfile`'s syntax only, not a live rehearsal.
+
+## Real-data hardening (M10)
+
+**Parser tolerance for Meta's known thread categories:** `_MESSAGE_ENTRY_RE`
+(`services/ingest/instagram/export_reader.py`) and `MESSAGE_JSON_RE`
+(`services/ingest/format_detection.py`, the single source of truth for
+`KNOWN_MESSAGE_CATEGORIES` — the parser imports it from there) match
+`messages/<category>/<dir>/message_N.json` for `category` in `inbox`,
+`message_requests`, `filtered_threads`, `archived_threads` — Meta's own
+documented export categories, not something inferred from any real user's
+file. `thread_path` becomes `<category>/<dir>`, so a `message_requests`
+thread can never collide with an `inbox` thread of the same directory name
+under the existing `(import_id, thread_path)` unique constraint; every other
+category is scanned, selected, and extracted exactly like `inbox` with no
+special-casing elsewhere in the pipeline.
+
+**Nothing the scan pass encounters is silently dropped.** `ScanIssues`
+(`export_reader.py`) is threaded through `thread_entries`/`_parse_message`/
+`iter_threads` and counts, without ever storing content: a non-dict page
+payload, a non-object raw message, a message missing `sender_name`/
+`timestamp_ms`, and — via the separate `scan_unrecognized_message_paths`
+pass over the full ZIP namelist — a message-shaped JSON path under a
+`messages/<category>/` directory that isn't one of the four known
+categories (plus a small capped list of the distinct unrecognized category
+*names* seen, a structural path segment, never message content). `
+run_import_scan` writes the result into `imports.counts["skipped"]`
+(freeform JSONB — no migration needed).
+
+**Import verification report:** `services/ingest/verification.py::
+build_verification_report` turns `Import.counts` (already computed by scan/
+extract) plus a fresh `duplicate_groups` query into `GET
+/api/imports/{id}/verification` (`app/api/imports.py`) — raw-vs-matched-vs-
+parsed message-JSON counts, the full skip breakdown with a static per-
+category description, and a duplicate-group summary **by reason only**
+(`same_shortcode`/`same_canonical_url`/`near_text` group/item counts — no
+per-group canonical URLs or timestamps; individual groups stay the existing
+Inbox grouped-card UI from M4). The frontend
+(`components/imports/verification-report.tsx`, rendered on the import
+detail page once a scan has run) is the answer to "how much of the export
+did we actually use, and why not the rest" — never a silent gap. Available
+with zeros/empties before a scan has run; no gating on import status.
+
+**Performance benchmark:** `backend/tests/fixture_builder.py::
+build_perf_export_zip` builds a ~5,000-message export across 20 threads
+(share/plain-text/occasional-duplicate mix) — deliberately **not** part of
+`main()`'s default fixture set (would slow every e2e run), built on demand
+by `backend/scripts/benchmark_import.py` or the opt-in `--perf-messages`/
+`--perf-out` CLI flags. The benchmark script calls `run_import_scan`/
+`run_import_extract` directly (no RQ/worker needed) against a throwaway
+`imports` row, times each, then measures `GET /api/items` p95 latency via
+`TestClient` logged in as an **existing** account (`--email`/`--password` or
+`BENCHMARK_EMAIL`/`BENCHMARK_PASSWORD` — the script never creates or deletes
+accounts) against the documented targets (scan < 60s, extract < 180s, p95 <
+300ms). It commits real rows against whatever `DATABASE_URL` is configured,
+like `app/cli.py`, so it cleans up its own throwaway import
+(`delete_raw_import(cascade=True)`) in a `finally` block, including on a
+mid-setup failure between saving the ZIP and creating its `imports` row.
+Never logs or prints message content — only counts and timings.
+
+**Real-data workflow:** this milestone's tooling is fully exercised against
+*synthetic* fixtures (including the 5k-message benchmark, which is
+synthetic by design — the perf targets are defined against it, not the real
+export). Running it against Adam's actual Instagram export is a separate,
+manual step documented in TESTING_STRATEGY.md's "Real-data workflow"
+section — never performed inside an automated coding session.

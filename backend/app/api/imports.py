@@ -37,10 +37,11 @@ from app.models.import_ import ExportFormat, Import, ImportStatus
 from app.models.job import Job, JobKind, JobStatus
 from app.queues import QUEUE_IMPORTS
 from app.redis_client import get_redis
-from app.schemas.import_ import ImportDetail, ImportRead, UploadAccepted
+from app.schemas.import_ import ImportDetail, ImportRead, ImportVerificationReport, UploadAccepted
 from app.schemas.job import JobRead
 from app.schemas.privacy import ImportDeletionReport, ImportDeletionRequest
 from app.services.ingest.format_detection import ExportKind, detect_export_format
+from app.services.ingest.verification import build_verification_report
 from app.services.ingest.zip_safety import ZipLimits, ZipRejectedError, validate_zip
 from app.services.privacy.deletion import delete_raw_import
 from app.services.storage.base import Storage
@@ -54,7 +55,8 @@ HTML_EXPORT_MESSAGE = (
 )
 UNRECOGNIZED_MESSAGE = (
     "This ZIP is not recognized as an Instagram JSON export "
-    "(no messages/inbox/*/message_*.json entries found)."
+    "(no messages/<inbox|message_requests|filtered_threads|archived_threads>/*/"
+    "message_*.json entries found)."
 )
 TOO_LARGE_MESSAGE = "upload exceeds the maximum allowed size"
 QUEUE_UNAVAILABLE_MESSAGE = "job queue unavailable"
@@ -284,6 +286,19 @@ def get_import(import_id: int, db: DbSession) -> ImportDetail:
         **base.model_dump(),
         latest_job=JobRead.model_validate(latest_job) if latest_job is not None else None,
     )
+
+
+@router.get("/{import_id}/verification", response_model=ImportVerificationReport)
+def get_import_verification(import_id: int, db: DbSession) -> ImportVerificationReport:
+    """Raw-vs-parsed counts, every scan-pass skip categorized, and a
+    duplicate-reason summary (M10) — built from `Import.counts` plus a fresh
+    duplicate-groups query; see docs/TESTING_STRATEGY.md's real-data
+    workflow. Available (with zeros where not yet computed) as soon as the
+    import row exists — no gating on status."""
+    import_row = db.get(Import, import_id)
+    if import_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import not found")
+    return build_verification_report(db, import_row)
 
 
 @router.post("/{import_id}/delete", response_model=ImportDeletionReport)

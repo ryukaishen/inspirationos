@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { ConfirmDeleteDialog } from "@/components/deletion/confirm-delete-dialog";
+import { VerificationReport } from "@/components/imports/verification-report";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,6 +15,7 @@ import {
   FINISHED_IMPORT_STATUSES,
   deleteImport,
   getImport,
+  getImportVerification,
   type ImportStatus,
 } from "@/lib/api";
 
@@ -45,6 +47,19 @@ export default function ImportDetailPage() {
     onSuccess: () => {
       setDeleteOpen(false);
       router.push("/import");
+    },
+  });
+
+  // Fetched once a scan has had a chance to run, so the report reflects real
+  // counts rather than the all-zero pre-scan state.
+  const { data: verification } = useQuery({
+    queryKey: ["import-verification", importId],
+    queryFn: () => getImportVerification(importId),
+    enabled:
+      Number.isInteger(importId) && importId > 0 && detail !== undefined && detail.status !== "uploaded",
+    refetchInterval: () => {
+      const status = detail?.status;
+      return status !== undefined && FINISHED_IMPORT_STATUSES.includes(status) ? false : 2000;
     },
   });
 
@@ -122,6 +137,17 @@ export default function ImportDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {verification && (
+        <Card data-testid="verification-report-card">
+          <CardHeader>
+            <CardTitle>Verification report</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <VerificationReport report={verification} />
+          </CardContent>
+        </Card>
+      )}
 
       {detail && (
         <ConfirmDeleteDialog

@@ -198,6 +198,45 @@ export async function getImport(importId: number): Promise<ImportDetail> {
   return (await response.json()) as ImportDetail;
 }
 
+// --- import verification report (M10) -----------------------------------------
+
+export interface SkippedEntryBreakdown {
+  category: string;
+  count: number;
+  description: string;
+}
+
+export interface DuplicateReasonSummary {
+  reason: string;
+  group_count: number;
+  item_count: number;
+}
+
+export interface ImportVerificationReport {
+  import_id: number;
+  status: ImportStatus;
+  raw_message_json_entries: number;
+  matched_message_json_entries: number;
+  conversations_found: number;
+  messages_parsed: number;
+  messages_skipped: number;
+  skip_breakdown: SkippedEntryBreakdown[];
+  extracted_messages: number | null;
+  items_extracted: number | null;
+  duplicate_summary: DuplicateReasonSummary[];
+}
+
+export async function getImportVerification(importId: number): Promise<ImportVerificationReport> {
+  const response = await fetch(`/api/imports/${importId}/verification`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await errorFromResponse(
+      response,
+      `verification report fetch failed with status ${response.status}`,
+    );
+  }
+  return (await response.json()) as ImportVerificationReport;
+}
+
 // --- conversations -----------------------------------------------------------
 
 export interface ConversationRead {
