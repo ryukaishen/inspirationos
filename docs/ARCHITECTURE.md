@@ -156,6 +156,22 @@ with a 1 MB floor) → export-format detection from entry **names** only.
 Central-directory metadata is all that is read — the archive is never
 extracted and no entry contents are opened at upload time.
 
+**Two independent size caps, both must be raised together for large real
+exports (found live, 2026-07-23 — a real ~2.4GB export failed uploading even
+after `MAX_UPLOAD_SIZE_MB` alone was raised):**
+1. `AppConfig.max_upload_size_mb` (backend, `.env` — default 2048MB/2GB) —
+   the app's own cap, enforced as described above.
+2. `next.config.ts`'s `experimental.proxyClientMaxBodySize` (frontend,
+   default 5gb in this repo, was Next's own 10MB default) — Next 16's
+   `src/proxy.ts` runs on every request for the redirect-to-`/login` UX
+   check, and Next silently caps how much body the proxy layer will
+   buffer/forward at 10MB unless this is raised, regardless of what the
+   backend itself allows. Exceeding it doesn't surface as a clean HTTP
+   error — the connection resets (`ECONNRESET`/"socket hang up" in the
+   frontend container logs), which without checking those logs looks like
+   an opaque failure. `proxy.ts` never reads the body itself (only the
+   session cookie), so raising this is safe.
+
 **Transaction-safe acceptance sequence:** promote spool → stored key
 (`os.replace`, same volume) → **one DB transaction** inserting the `imports`
 row plus its single `import_scan` `jobs` row → enqueue. Failure mapping:
@@ -443,6 +459,13 @@ job-row-then-enqueue, payloads carry IDs/scalars only). The frontend
   and verified server-side — implemented for topics in M6); only items with
   real text may enter generation context (enforced in code); M8 adds a
   post-generation regex flagging suspicious performance claims in artifacts.
+- `ProjectFields`'s free-text list fields (`domains`, `tech_stack`,
+  `skills_demonstrated`, `datasets`, `risks`) run through a shared
+  order-preserving dedup `field_validator` — found live against a real
+  Anthropic generation (2026-07-23), which returned `domains` with the same
+  entry twice and broke a React list `key` in `project-card.tsx`/the
+  project detail page (both now also defensively dedupe on render). A
+  repeated entry is silently deduped, never a generation failure.
 - Scoring (M7) is hybrid: LLM sub-scores with rationales; final score computed
   at read time as `Σ(weight_i × subscore_i)` from user weights — instant
   re-rank.

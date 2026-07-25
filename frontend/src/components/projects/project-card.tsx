@@ -58,7 +58,7 @@ export function ProjectCard({ project, weights, selected, onToggleSelect }: Proj
                   Combined
                 </Badge>
               )}
-              {project.domains.map((domain) => (
+              {[...new Set(project.domains)].map((domain) => (
                 <Badge key={domain} variant="secondary" data-testid="project-domain">
                   {domain}
                 </Badge>

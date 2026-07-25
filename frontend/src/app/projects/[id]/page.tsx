@@ -161,7 +161,7 @@ export default function ProjectDetailPage() {
                       Combined from #{project.parent_project_ids.join(" + #")}
                     </Badge>
                   )}
-                  {project.domains.map((domain) => (
+                  {[...new Set(project.domains)].map((domain) => (
                     <Badge key={domain} variant="secondary">
                       {domain}
                     </Badge>

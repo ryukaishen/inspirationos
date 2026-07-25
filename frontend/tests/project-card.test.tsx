@@ -76,4 +76,16 @@ describe("ProjectCard", () => {
     expect(screen.getByTestId("project-score")).toHaveTextContent("38.0");
     expect(screen.getByTestId("project-combined-badge")).toHaveTextContent("Combined");
   });
+
+  it("renders a duplicate domain only once (seen live from a real generation)", () => {
+    render(
+      <ProjectCard
+        project={makeProject({ domains: ["applied ai", "applied ai"] })}
+        weights={{}}
+        selected={false}
+        onToggleSelect={() => {}}
+      />,
+    );
+    expect(screen.getAllByTestId("project-domain")).toHaveLength(1);
+  });
 });

@@ -9,7 +9,7 @@ constructed output.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 TASK_TOPIC_EXTRACTION = "topic_extraction"
 TASK_CLUSTER_LABEL = "cluster_label"
@@ -78,6 +78,22 @@ class ProjectFields(BaseModel):
     skills_demonstrated: list[str] = Field(min_length=1, max_length=15)
     risks: list[str] = Field(default_factory=list, max_length=10)
     scores: ProjectScores
+
+    @field_validator(
+        "domains", "tech_stack", "skills_demonstrated", "datasets", "risks", mode="after"
+    )
+    @classmethod
+    def _dedupe_preserving_order(cls, value: list[str]) -> list[str]:
+        """The model occasionally repeats an entry (seen live: `domains` with
+        the same value twice, which broke a React list key downstream) —
+        silently dedupe rather than fail generation over a cosmetic repeat."""
+        seen: set[str] = set()
+        deduped = []
+        for entry in value:
+            if entry not in seen:
+                seen.add(entry)
+                deduped.append(entry)
+        return deduped
 
 
 class ProjectIdea(ProjectFields):
