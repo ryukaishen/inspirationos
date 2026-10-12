@@ -26,6 +26,8 @@ class ItemRead(BaseModel):
     enriched_author: str | None
     enriched_source: EnrichmentSource | None
     context_note: str | None
+    transcript: str | None
+    visual_text: str | None
     status: ItemStatus
     tags: list[str]
     duplicate_group_id: int | None

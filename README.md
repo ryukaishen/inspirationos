@@ -61,8 +61,10 @@ This app handles private Instagram messages. Raw exports, uploaded files,
 extracted messages, secrets, and generated user data live only under gitignored
 paths (`var/`, `private-data/`, `.env`) and are never committed. Logs never
 contain message bodies. Importing is fully offline; nothing contacts Instagram
-unless enrichment is explicitly enabled *and* triggered per item or batch. The
-app never asks for your Instagram password and never automates Instagram login.
+unless enrichment is explicitly enabled *and* triggered per item or batch, or you
+run the `transcribe-reels` command yourself (it uses your own exported browser
+cookies, keeps no videos, and transcribes locally). The app never asks for your
+Instagram password and never automates Instagram login.
 See [docs/PRIVACY_SECURITY.md](docs/PRIVACY_SECURITY.md).
 
 ## Getting started
@@ -112,6 +114,42 @@ cd e2e
 npm install
 npx playwright test
 ```
+
+### Transcribe your saved reels (host only)
+
+The export only contains reel *links*. To get what each reel actually says and
+shows, run this once on your own computer with the app's Postgres reachable
+(the compose stack up, or `DATABASE_URL` set in `backend/.env`) after you've
+imported and selected your self-DM conversation:
+
+```bash
+cd backend
+.venv/Scripts/pip install -e ".[media]"   # yt-dlp, faster-whisper, Pillow (one-time)
+```
+
+1. **Export your Instagram cookies** (Edge or Chrome): install a "Get
+   cookies.txt LOCALLY"-style extension, log into instagram.com (a secondary
+   account is safer), and export `cookies.txt` for instagram.com. Keep it
+   outside the repo (or under `var/`) — it is a login credential.
+   (`--cookies-from-browser firefox` also works; Chrome/Edge direct reading
+   usually fails on Windows.)
+2. Optional: set `ANTHROPIC_API_KEY` in `backend/.env` so reels with little
+   speech get their on-screen text read (a few frames per reel, counted
+   against the monthly AI budget). Without it, only speech is transcribed.
+3. Try a small batch first, then the rest:
+
+```bash
+.venv/Scripts/python -m app.cli transcribe-reels --cookies C:/path/to/cookies.txt --dry-run
+.venv/Scripts/python -m app.cli transcribe-reels --cookies C:/path/to/cookies.txt --limit 25
+.venv/Scripts/python -m app.cli transcribe-reels --cookies C:/path/to/cookies.txt
+```
+
+It paces itself (~8s between reels), skips reels already done, stops if
+Instagram starts refusing (refresh `cookies.txt`, wait, re-run), and deletes
+each video right after transcribing it. Then open **Clusters → Run analysis**
+so search, clustering, and project ideas use the new text. Details:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ("Reel media extraction") and
+[docs/PRIVACY_SECURITY.md](docs/PRIVACY_SECURITY.md).
 
 Enable the pre-commit hooks (ruff, gitleaks, frontend lint) once per clone:
 

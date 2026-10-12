@@ -43,6 +43,14 @@ def test_redacts_field_value_substrings_in_the_message() -> None:
     assert "item_id=42" in record.getMessage()
 
 
+def test_redacts_reel_media_text_fields() -> None:
+    record = _record("debug: transcript='spoken words' visual_text=onscreen item_id=7")
+    RedactingFilter().filter(record)
+    assert "spoken words" not in record.getMessage()
+    assert "onscreen" not in record.getMessage()
+    assert "item_id=7" in record.getMessage()
+
+
 def test_leaves_ordinary_messages_untouched() -> None:
     record = _record("job %s succeeded")
     record.args = ("42",)

@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
-    "sqlalchemy>=2.0.30",
+    "sqlalchemy>=2.0.30,<2.1",
     "alembic>=1.13",
     "psycopg[binary]>=3.2",
     "redis>=5.0",
@@ -18,12 +18,19 @@ dependencies = [
     "fastembed>=0.5",
     "scikit-learn>=1.5",
     "numpy>=1.26",
-    "anthropic>=0.40",
-    "openai>=1.40",
+    "anthropic>=0.40,<1",
+    "openai>=1.40,<3",
     "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]
+# Host-only reel media extraction (`python -m app.cli transcribe-reels`).
+# Not installed in the Docker images or CI; imported lazily by services/media/.
+media = [
+    "yt-dlp>=2025.1.1",
+    "faster-whisper>=1.1",
+    "Pillow>=10.4",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -63,7 +70,7 @@ files = ["app"]
 
 [[tool.mypy.overrides]]
 # No type stubs published for these libraries.
-module = ["sklearn.*", "fastembed.*"]
+module = ["sklearn.*", "fastembed.*", "yt_dlp.*", "faster_whisper.*", "av.*", "PIL.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

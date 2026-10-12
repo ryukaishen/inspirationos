@@ -16,6 +16,7 @@ import {
   type ItemEntry,
   type ItemStatus,
 } from "@/lib/api";
+import { ReelText } from "@/components/inbox/reel-text";
 import { STATUS_LABELS, STATUS_VARIANT, TYPE_LABELS } from "@/lib/item-labels";
 
 function formatTimestamp(value: string | null): string {
@@ -65,7 +66,7 @@ export function ItemCard({ entry, selected, onToggleSelect }: ItemCardProps) {
     setEditing(false);
   }
 
-  const previewText = item.share_text ?? item.adjacent_text;
+  const previewText = item.share_text ?? item.adjacent_text ?? item.enriched_caption;
 
   return (
     <Card data-testid="item-card" data-item-id={item.id}>
@@ -88,6 +89,7 @@ export function ItemCard({ entry, selected, onToggleSelect }: ItemCardProps) {
         </div>
 
         {previewText && <p className="line-clamp-3 text-foreground">{previewText}</p>}
+        <ReelText item={item} />
 
         {editing ? (
           <div className="space-y-2">

@@ -17,7 +17,13 @@ import {
   type ItemEntry,
   type ItemStatus,
 } from "@/lib/api";
-import { STATUS_LABELS, STATUS_VARIANT, TYPE_LABELS } from "@/lib/item-labels";
+import { ReelText } from "@/components/inbox/reel-text";
+import {
+  ENRICHED_SOURCE_LABELS,
+  STATUS_LABELS,
+  STATUS_VARIANT,
+  TYPE_LABELS,
+} from "@/lib/item-labels";
 import type { ReviewAction } from "@/lib/review-keyboard";
 import { useReviewKeyboard } from "@/lib/use-review-keyboard";
 
@@ -138,7 +144,9 @@ export default function ReviewPage() {
   }
 
   const item = current.item;
-  const enrichedSourceLabel = item.enriched_source === "oembed" ? "oEmbed" : "OpenGraph";
+  const enrichedSourceLabel = item.enriched_source
+    ? ENRICHED_SOURCE_LABELS[item.enriched_source]
+    : "";
 
   return (
     <main
@@ -176,7 +184,12 @@ export default function ReviewPage() {
               <span className="text-xs text-muted-foreground">(via {enrichedSourceLabel})</span>
             </p>
           )}
-          {!item.share_text && !item.adjacent_text && !item.enriched_caption && (
+          <ReelText item={item} defaultOpen />
+          {!item.share_text &&
+            !item.adjacent_text &&
+            !item.enriched_caption &&
+            !item.transcript &&
+            !item.visual_text && (
             <p className="text-muted-foreground">No context yet — describe it below.</p>
           )}
 

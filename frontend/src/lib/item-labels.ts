@@ -1,5 +1,5 @@
 import type { BadgeProps } from "@/components/ui/badge";
-import type { ItemStatus, ItemType } from "@/lib/api";
+import type { EnrichmentSource, ItemStatus, ItemType } from "@/lib/api";
 
 export const TYPE_LABELS: Record<ItemType, string> = {
   reel: "Reel",
@@ -24,4 +24,10 @@ export const STATUS_VARIANT: Record<ItemStatus, BadgeProps["variant"]> = {
   reviewed: "success",
   archived: "muted",
   ignored: "outline",
+};
+
+export const ENRICHED_SOURCE_LABELS: Record<EnrichmentSource, string> = {
+  oembed: "oEmbed",
+  og: "OpenGraph",
+  ytdlp: "reel download",
 };

@@ -10,6 +10,9 @@ from app.models.base import Base
 class EnrichmentSource(enum.Enum):
     oembed = "oembed"
     og = "og"
+    # Caption/author returned by yt-dlp alongside the reel's media, written by
+    # the operator-run `transcribe-reels` CLI (services/media/).
+    ytdlp = "ytdlp"
 
 
 class EnrichmentStatus(enum.Enum):
@@ -21,7 +24,7 @@ class EnrichmentStatus(enum.Enum):
 
 
 class EnrichmentAttempt(Base):
-    """Full audit trail of every oEmbed/OpenGraph fetch attempt.
+    """Full audit trail of every oEmbed/OpenGraph/yt-dlp fetch attempt.
 
     One row per attempted source per item per run — never skipped, never
     overwritten. Caching (skip a source once it has a `success`/`not_found`

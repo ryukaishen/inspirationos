@@ -1,6 +1,7 @@
 # InspirationOS — Implementation Plan
 
-Ten sequential milestones. **The final scope is the complete personal-use
+Ten sequential milestones, plus Milestone 11 (reel media extraction) added at the
+user's request after real use. **The final scope is the complete personal-use
 version — no milestone may be dropped or trimmed as "not needed for an MVP."**
 Work on one milestone at a time; a milestone is done only when every scope box
 is checked, every acceptance criterion passes, and CI is green.
@@ -379,4 +380,81 @@ cd backend && python -m pytest -q                       # entire suite, includin
 cd frontend && npm run lint && npx tsc --noEmit && npm run test -- --run
 cd backend && python scripts/benchmark_import.py --email <existing-account>   # prints timings; must meet targets
 cd e2e && npx playwright test                           # full critical path, including specs/verification.spec.ts
+```
+
+## Milestone 11 — Reel Media Extraction
+
+**Added 2026-10-12 at the user's request**, after real use showed the core
+problem: the export only has reel *links*, the M5 oEmbed/OpenGraph path almost
+never succeeds against today's Instagram, so nearly every item stayed
+`needs_context` and nothing reached AI generation. This milestone gets the
+reel's actual content — speech and on-screen text — into the app. The
+user explicitly approved the one exception it requires to the "no cookies
+against Instagram" rule (see PRIVACY_SECURITY.md, "Reel media extraction").
+
+**Goal:** one operator command turns every saved reel into real, searchable
+text that flows into search, clustering, and project generation.
+
+Scope:
+- [x] Migration `0009`: `items.transcript`, `items.visual_text`; `ytdlp` value
+  on `enrichment_source`; FTS index rebuilt over all real text fields
+  (including `enriched_caption`, previously unsearched).
+- [x] `services/media/`: pure `pipeline.py` (extract → apply → select →
+  run) behind injected adapters; `ytdlp.py` (cookies file / browser cookies,
+  silent logger, duration cap, error taxonomy), `whisper.py` (local
+  faster-whisper; no-audio ⇒ empty transcript), `frames.py` (evenly spaced
+  frames, decoded to the exact timestamp), `vision.py` (budget-checked,
+  audited Anthropic call for low-speech reels).
+- [x] `python -m app.cli transcribe-reels` with disclosure + confirmation,
+  `--cookies`/`--cookies-from-browser`, `--limit`, `--item-id`,
+  `--no-vision`, `--whisper-model`, `--dry-run`, `--yes`; paced with jitter;
+  circuit breaker; resumable (per-reel commits; done reels skipped).
+- [x] Anti-hallucination gate, embedding text, LLM context, and inbox search
+  all include `transcript`/`visual_text`; LLM per-item caps raised so
+  transcripts survive truncation; redaction list extended.
+- [x] UI: collapsible Transcript / On-screen text on inbox cards (collapsed)
+  and in review (open); cluster member preview falls back to transcript;
+  enriched-source label "reel download".
+- [x] Optional `media` extra in `pyproject.toml` (host-only, not in Docker/CI).
+- [x] Dependency pins (`sqlalchemy<2.1`, `anthropic<1`, `openai<3`): fresh
+  installs had started resolving to majors that broke mypy and made the
+  respx-mocked provider tests send **real** HTTP requests.
+- [ ] Run against the real export on the user's machine (first 25 reels),
+  spot-check that transcripts contain the remembered insight. — pending, user.
+- [ ] Ask-a-question over transcripts (retrieve closest items → grounded,
+  cited answer). — deferred until the 25-reel check confirms transcript
+  quality; planned as the next milestone.
+
+Acceptance criteria:
+- [x] A reel shared several times is downloaded once and its text lands on
+  every item sharing it; each item gets an `enrichment_attempts` row.
+- [x] Done reels (`success`/`not_found`) are skipped on re-run;
+  `blocked`/`error` reels are retried.
+- [x] The breaker stops a run after N consecutive blocks; no sleep before the
+  first reel, one paced sleep between reels.
+- [x] No downloaded video survives a reel's processing (asserted).
+- [x] Progress output and stored errors never contain transcript/caption text
+  (asserted with a sentinel string); yt-dlp messages are discarded.
+- [x] A transcript-only item becomes eligible for generation, is promoted
+  `needs_context` → `new`, loses its stale embedding, and is found by inbox
+  search on a word from its transcript.
+- [x] Vision reader: budget exceeded ⇒ no API call; every call leaves a
+  content-free `ai_requests` row; `NONE` ⇒ no text.
+- [x] Real adapters exercised offline: yt-dlp adapter against a stand-in
+  module; frame sampling and audio detection against a generated video
+  (skips with an explicit reason when the `media` extra isn't installed).
+- [ ] Real end-to-end download + transcription on the user's machine. —
+  could not be run in the development sandbox (Instagram and the Whisper
+  model host are unreachable there); pending the user's first run.
+
+Test commands:
+```bash
+# standard suite
+cd backend && python -m ruff format . && python -m ruff check --fix .
+cd backend && python -m mypy app
+cd backend && python -m pytest -q          # 455 passed, 3 skipped (pre-existing) with the media extra;
+                                           # 453 passed + 2 explicit media-extra skips without it (CI)
+cd frontend && npm run lint && npx tsc --noEmit && npm run test -- --run   # 86 passed
+# optional-extra tests
+cd backend && pip install -e ".[dev,media]" && python -m pytest -q tests/unit/test_media_adapters.py
 ```

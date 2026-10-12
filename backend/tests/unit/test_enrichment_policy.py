@@ -117,6 +117,8 @@ def _item(**overrides: str | None) -> Item:
         "adjacent_text": None,
         "enriched_caption": None,
         "context_note": None,
+        "transcript": None,
+        "visual_text": None,
     }
     fields.update(overrides)
     return Item(**fields)  # type: ignore[arg-type]
@@ -129,6 +131,9 @@ def test_is_eligible_for_generation_requires_at_least_one_nonblank_field() -> No
     assert is_eligible_for_generation(_item(adjacent_text="nearby context")) is True
     assert is_eligible_for_generation(_item(enriched_caption="from oembed")) is True
     assert is_eligible_for_generation(_item(context_note="user note")) is True
+    assert is_eligible_for_generation(_item(transcript="spoken words")) is True
+    assert is_eligible_for_generation(_item(visual_text="on-screen words")) is True
+    assert is_eligible_for_generation(_item(transcript="  ", visual_text="")) is False
 
 
 # --- initial_status_for (needs_context auto-assignment) -----------------------

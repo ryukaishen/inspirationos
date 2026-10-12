@@ -6,13 +6,16 @@ code and all future sessions; they take precedence over convenience.
 ## Never
 
 - Ask for the Instagram password, automate Instagram login, bypass access
-  controls, use cookies/headless browsers against Instagram, or handle
-  CAPTCHAs.
+  controls, use headless browsers against Instagram, or handle CAPTCHAs.
+- Use Instagram session cookies anywhere **except** the operator-run
+  `transcribe-reels` CLI described under "Reel media extraction" below — the
+  one deliberate, user-approved exception (2026-10-12).
 - Commit raw Instagram exports, private messages, API keys, `.env` files,
   uploaded files, or generated user data to git.
 - Log private message bodies. Redacted fields (never in logs, error strings,
   job payloads, or `ai_requests`): `text`, `share_text`, `adjacent_text`,
-  `context_note`, `content_md`, and anything derived from message content.
+  `context_note`, `content_md`, `transcript`, `visual_text`, and anything
+  derived from message or reel content.
 - Send message content to any external service. AI providers receive only the
   minimal grounding context the user's generation request requires, and only
   when a real provider is explicitly configured.
@@ -48,6 +51,43 @@ code and all future sessions; they take precedence over convenience.
 - Enrichment requests are anonymous GETs with an honest User-Agent, rate
   limited (token bucket), with timeouts, backoff, a circuit breaker, and a
   full audit trail in `enrichment_attempts`.
+
+## Reel media extraction (operator-run; the cookie exception)
+
+Shared reels arrive in the export as links only, so the reel's content has to
+be fetched to be useful. `python -m app.cli transcribe-reels`
+(`backend/app/services/media/`) does this under these rules:
+
+- **Explicit, manual, on the host.** Never run by the worker, a schedule, or
+  any API route; the CLI prints a disclosure (what is sent where, ToS/account
+  risk, whether vision is on) and requires a typed confirmation (`--yes` to
+  skip it). Requires the optional `media` extra, which the Docker images and
+  CI don't install.
+- **The operator's own session, never a login.** Cookies come from a
+  `cookies.txt` the operator exports from their own browser (or
+  `--cookies-from-browser`). The app never asks for, stores, or automates an
+  Instagram password, and never solves challenges — a login wall or rate
+  limit counts as `blocked`. A secondary Instagram account is recommended.
+  The cookies file must stay outside the repo or under gitignored `var/`.
+- **Paced and self-stopping.** One reel at a time, ~8s ± 4s apart
+  (`MEDIA_DELAY_SECONDS`/`MEDIA_DELAY_JITTER_SECONDS`); a circuit breaker stops
+  the run after 3 consecutive `blocked` results. Only items the user already
+  saved are fetched — repeat shares of one reel are fetched once.
+- **Video never kept.** Each download lives in a temporary directory under
+  gitignored `var/data/tmp/media/` and is deleted as soon as that reel is
+  processed; only extracted text is stored (`items.transcript`,
+  `items.visual_text`, and the caption/author in `enriched_*`).
+- **Local speech-to-text.** Whisper (faster-whisper) runs on the operator's
+  machine; audio never leaves it.
+- **Vision is the only content sent out**, and only when `ANTHROPIC_API_KEY`
+  is set and `--no-vision` isn't passed: for reels with little speech, ≤4
+  downscaled still frames go to the configured fast Anthropic model to read
+  on-screen text. Each call is budget-checked first and audited in
+  `ai_requests` (no content).
+- **Audit and output hygiene.** Every fetch is a row in `enrichment_attempts`
+  (`source = ytdlp`). yt-dlp output is routed to a silent logger; progress
+  lines show item IDs, statuses, and word counts only; errors are exception
+  class names.
 
 ## Authentication & sessions
 

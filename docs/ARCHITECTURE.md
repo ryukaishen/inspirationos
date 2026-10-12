@@ -75,6 +75,8 @@ inspiration-os/
 │   │   │   │                     #   instagram/: export_reader.py, parser.py, encoding.py,
 │   │   │   │                     #   links.py, selfdm.py
 │   │   │   ├── enrichment/       # fetcher.py (oembed/og), policy.py (consent, rate limit)
+│   │   │   ├── media/            # pipeline.py (pure orchestration), ytdlp.py, whisper.py,
+│   │   │   │                     #   frames.py, vision.py — host-only `transcribe-reels` (M11)
 │   │   │   ├── ai/               # provider.py, anthropic_provider.py, openai_provider.py,
 │   │   │   │                     #   mock_provider.py, structured.py, prompts/, budget.py
 │   │   │   ├── analysis/         # embeddings.py, clustering.py, topics.py, dedupe.py
@@ -360,6 +362,67 @@ by the M3 extract pipeline, `services/ingest/instagram/parser.py`) assigns
 is the anti-hallucination predicate from DATA_MODEL.md — implemented here
 (not a not-yet-existing `generation/` package) since M5 tests it directly;
 M6/M7 import this same function rather than re-implementing it.
+
+**Known limitation:** Instagram retired the anonymous `api.instagram.com/oembed`
+endpoint and serves a login wall to anonymous page fetches, so this path
+almost never succeeds today. Real reel content comes from the M11
+`transcribe-reels` CLI below.
+
+## Reel media extraction — M11
+
+Shared reels are links only in the export, so the useful content (what the
+creator says and shows) has to be fetched. Operator-run on the host:
+
+```bash
+cd backend
+pip install -e ".[media]"          # yt-dlp, faster-whisper (+ PyAV), Pillow
+python -m app.cli transcribe-reels --cookies path/to/cookies.txt --limit 25
+```
+
+Per reel (`services/media/pipeline.py::extract_reel`): download with yt-dlp
+into a temp dir (operator's session cookies; format `b[ext=mp4]` so no ffmpeg
+merge is needed) → transcribe locally with faster-whisper (`small`, int8, VAD;
+an absent audio track is an empty transcript, not an error) → if the
+transcript has < 25 words, sample 4 evenly spaced frames (PyAV, decoded
+forward from the preceding keyframe to the exact timestamp) and have the
+configured fast Anthropic model read on-screen text (`vision.py`;
+budget-checked, `ai_requests` audit, a `NONE` reply means no text) → delete
+the video. `apply_result` writes `transcript`/`visual_text` (and the
+caption/author into `enriched_*` when no other source set them), clears the
+embedding, promotes `needs_context` → `new`, and audits one
+`enrichment_attempts` row per item.
+
+**Why the host, not the worker:** the containers have neither the operator's
+browser cookies nor ffmpeg/Whisper, and this is a deliberate, manual,
+consent-heavy action — keeping it out of the job queue means nothing can ever
+trigger it implicitly. The CLI talks to the same Postgres (`DATABASE_URL`,
+`localhost:5432` with the compose stack up).
+
+**Selection & resumability:** `select_pending_reels` returns reel/tv/post
+items with no `ytdlp` `success`/`not_found` attempt, newest share first,
+grouped by shortcode so repeat shares download once. Each reel commits on its
+own, so stopping mid-run loses nothing; `blocked`/`error` reels are retried
+next run.
+
+**Error taxonomy** (`ytdlp.classify_download_error`, by message keywords —
+the message itself is discarded): login/rate-limit/checkpoint/cookies →
+`blocked` (feeds the circuit breaker, default 3 in a row stops the run);
+404/no video/private/removed → `not_found` (cached as done); longer than
+`MEDIA_MAX_DURATION_SECONDS` → `not_found` (`MediaTooLongError`); anything
+else → `error`. A failed transcription with no on-screen text is `error`
+(retried), not cached.
+
+**After a run:** Clusters → Run analysis re-embeds the changed items so
+search, clustering, topics, and project generation use the new text. The
+per-item LLM context caps (`TOPICS_MAX_CHARS_PER_ITEM` 2000,
+`PROJECTS_MAX_CHARS_PER_ITEM` 1500) were raised from 500/400 so a 1–2 minute
+transcript survives truncation.
+
+**Limitations:** carousel posts use the largest video only; image-only posts
+are `not_found` (their caption isn't captured); embeddings truncate very long
+transcripts (bge-small's 512-token window), so search over multi-minute
+videos favors their opening; yt-dlp's Instagram extractor breaks periodically
+and needs `pip install -U yt-dlp`.
 
 ## Fast review mode — M5
 

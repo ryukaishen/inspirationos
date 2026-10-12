@@ -72,11 +72,15 @@ def _canonical_only_stmt() -> Select[tuple[Item]]:
 def _fts_document() -> ColumnElement[str]:
     # coalesce(...) || ' ' || ... rather than concat(...): concat() is not
     # IMMUTABLE-eligible for the matching Postgres expression index (see the
-    # 0004 migration), so this must stay textually equivalent to that index.
+    # 0009 migration), so this must stay textually equivalent to that index.
     share = func.coalesce(Item.share_text, "")
     adjacent = func.coalesce(Item.adjacent_text, "")
     note = func.coalesce(Item.context_note, "")
-    return func.to_tsvector("english", share + " " + adjacent + " " + note)
+    caption = func.coalesce(Item.enriched_caption, "")
+    transcript = func.coalesce(Item.transcript, "")
+    visual = func.coalesce(Item.visual_text, "")
+    document = share + " " + adjacent + " " + note + " " + caption + " " + transcript + " " + visual
+    return func.to_tsvector("english", document)
 
 
 def _duplicate_count(item: Item, counts_by_group: dict[int, int]) -> int:

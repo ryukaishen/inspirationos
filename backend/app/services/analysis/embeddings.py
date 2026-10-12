@@ -36,7 +36,14 @@ class EmbeddingProvider(Protocol):
 def embedding_text_for(item: Item) -> str | None:
     """The text an item is embedded from: every real text field it carries,
     concatenated. Returns None when the item has no text at all."""
-    parts = [item.share_text, item.adjacent_text, item.enriched_caption, item.context_note]
+    parts = [
+        item.share_text,
+        item.adjacent_text,
+        item.enriched_caption,
+        item.context_note,
+        item.transcript,
+        item.visual_text,
+    ]
     joined = "\n".join(part.strip() for part in parts if part is not None and part.strip())
     return joined or None
 

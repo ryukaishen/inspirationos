@@ -103,7 +103,14 @@ def classify_response(http_status: int | None, exc: Exception | None) -> Enrichm
 def is_eligible_for_generation(item: Item) -> bool:
     """Anti-hallucination gate (DATA_MODEL.md): an item may enter AI
     generation input only if it carries at least one non-blank text field."""
-    candidates = (item.share_text, item.adjacent_text, item.enriched_caption, item.context_note)
+    candidates = (
+        item.share_text,
+        item.adjacent_text,
+        item.enriched_caption,
+        item.context_note,
+        item.transcript,
+        item.visual_text,
+    )
     return any(text is not None and text.strip() for text in candidates)
 
 

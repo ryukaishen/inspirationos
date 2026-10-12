@@ -1,10 +1,10 @@
 """Log redaction (M9, see PRIVACY_SECURITY.md): private message content —
-`text`, `share_text`, `adjacent_text`, `context_note`, `content_md` — must
-never appear in logs. The codebase already follows this by construction
-(exceptions carry only class names, job payloads carry only IDs/counts —
-see ARCHITECTURE.md's job conventions), so this filter is the defense-in-
-depth backstop for any future accidental leak, not a workaround for an
-existing one.
+`text`, `share_text`, `adjacent_text`, `context_note`, `content_md`,
+`transcript`, `visual_text` — must never appear in logs. The codebase
+already follows this by construction (exceptions carry only class names, job
+payloads carry only IDs/counts — see ARCHITECTURE.md's job conventions), so
+this filter is the defense-in-depth backstop for any future accidental leak,
+not a workaround for an existing one.
 """
 
 from __future__ import annotations
@@ -12,7 +12,15 @@ from __future__ import annotations
 import logging
 import re
 
-REDACTED_FIELDS = ("text", "share_text", "adjacent_text", "context_note", "content_md")
+REDACTED_FIELDS = (
+    "text",
+    "share_text",
+    "adjacent_text",
+    "context_note",
+    "content_md",
+    "transcript",
+    "visual_text",
+)
 REDACTED_PLACEHOLDER = "[redacted]"
 
 _FIELD_VALUE_PATTERN = re.compile(

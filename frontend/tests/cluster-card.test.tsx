@@ -50,6 +50,8 @@ function item(id: number): api.ItemRead {
     enriched_author: null,
     enriched_source: null,
     context_note: null,
+    transcript: null,
+    visual_text: null,
     status: "new",
     tags: [],
     duplicate_group_id: null,

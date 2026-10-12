@@ -40,6 +40,8 @@ function makeItem(overrides: Partial<ItemRead> = {}): ItemRead {
     enriched_author: null,
     enriched_source: null,
     context_note: null,
+    transcript: null,
+    visual_text: null,
     status: "new",
     tags: ["fun", "travel"],
     duplicate_group_id: null,
@@ -85,6 +87,32 @@ describe("ItemCard", () => {
     expect(screen.getByText("fun")).toBeInTheDocument();
     expect(screen.getByText("travel")).toBeInTheDocument();
     expect(screen.getByText("No note yet.")).toBeInTheDocument();
+  });
+
+  it("shows reel transcript and on-screen text collapsed, with word counts", () => {
+    renderWithClient(
+      <ItemCard
+        entry={makeEntry({
+          share_text: null,
+          transcript: "first validate the idea with five interviews",
+          visual_text: "STEP 1 interview",
+        })}
+        selected={false}
+        onToggleSelect={vi.fn()}
+      />,
+    );
+    const transcript = screen.getByTestId("reel-transcript");
+    expect(transcript).not.toHaveAttribute("open");
+    expect(transcript).toHaveTextContent("Transcript (7 words)");
+    expect(transcript).toHaveTextContent("first validate the idea with five interviews");
+    expect(screen.getByTestId("reel-visual")).toHaveTextContent("On-screen text (3 words)");
+  });
+
+  it("renders no reel-text block for items without extracted text", () => {
+    renderWithClient(
+      <ItemCard entry={makeEntry()} selected={false} onToggleSelect={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("reel-text")).not.toBeInTheDocument();
   });
 
   it("always shows an Open original link to the raw URL", () => {

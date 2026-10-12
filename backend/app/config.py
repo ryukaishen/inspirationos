@@ -95,17 +95,33 @@ class AppConfig(BaseSettings):
     cluster_distance_threshold: float = 0.4
     near_duplicate_similarity_threshold: float = 0.95
     # Per-item text truncation and per-cluster item cap for LLM topic/label
-    # context — cost control, never a correctness knob.
-    topics_max_chars_per_item: int = 500
+    # context — cost control, never a correctness knob. Sized so a ~1-2 minute
+    # reel transcript survives truncation.
+    topics_max_chars_per_item: int = 2000
     topics_max_items_per_cluster: int = 30
 
     # Project generation (M7): context caps mirror the topics caps; count is
     # how many ideas one generation batch asks for (request can override up
     # to the max).
     projects_max_items: int = 60
-    projects_max_chars_per_item: int = 400
+    projects_max_chars_per_item: int = 1500
     projects_default_count: int = 3
     projects_max_count: int = 10
+
+    # Reel media extraction (`python -m app.cli transcribe-reels`, run by the
+    # operator on the host — see services/media/ and PRIVACY_SECURITY.md).
+    # Pacing defaults are deliberately slow to keep the operator's Instagram
+    # session from being flagged; the breaker stops a run after this many
+    # consecutive login/rate-limit failures.
+    media_delay_seconds: float = 8.0
+    media_delay_jitter_seconds: float = 4.0
+    media_circuit_breaker_threshold: int = 3
+    media_whisper_model: str = "small"
+    # Reels whose transcript has fewer words than this get their sampled
+    # frames read by the vision model (text-on-screen reels).
+    media_vision_min_transcript_words: int = 25
+    media_vision_frame_count: int = 4
+    media_max_duration_seconds: int = 900
 
 
 @lru_cache

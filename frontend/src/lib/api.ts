@@ -308,7 +308,7 @@ export const ITEM_STATUSES: readonly ItemStatus[] = [
   "ignored",
 ];
 
-export type EnrichmentSource = "oembed" | "og";
+export type EnrichmentSource = "oembed" | "og" | "ytdlp";
 
 export interface ItemRead {
   id: number;
@@ -328,6 +328,8 @@ export interface ItemRead {
   enriched_author: string | null;
   enriched_source: EnrichmentSource | null;
   context_note: string | null;
+  transcript: string | null;
+  visual_text: string | null;
   status: ItemStatus;
   tags: string[];
   duplicate_group_id: number | null;

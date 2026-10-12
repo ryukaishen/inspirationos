@@ -85,6 +85,16 @@ reproducing it before the fix is considered done.
   build their own really-committed-rows `client`/session fixtures rather
   than the savepoint-scoped one (workers use their own DB session), so they
   need the login/CSRF treatment applied locally too.
+- **Reel media extraction (M11)** — `unit/test_media_pipeline.py` drives the
+  pure pipeline with fake downloader/transcriber/frame-reader adapters (no
+  network, no yt-dlp/Whisper); `unit/test_media_adapters.py` runs the real
+  yt-dlp adapter against a stand-in `yt_dlp` module and the real frame
+  sampler/audio detection against a video generated in the test (these two
+  need the optional `media` extra and skip with an explicit reason without
+  it — CI doesn't install it); `workers/test_media_transcription.py` covers
+  selection, persistence, search, and the vision reader's budget/audit
+  against real Postgres. A sentinel string asserts no extracted text ever
+  reaches progress output or stored errors.
 - Provider adapters (Anthropic/OpenAI) tested against faked HTTP (`respx`);
   **no live API keys in tests or CI, ever.** MockProvider covers all AI
   pipelines.

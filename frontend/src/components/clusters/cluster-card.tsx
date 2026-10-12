@@ -166,7 +166,12 @@ export function ClusterCard({ cluster }: { cluster: ClusterRead }) {
                       {item.shortcode ?? item.url_canonical}
                     </a>{" "}
                     <span className="text-muted-foreground">
-                      {item.share_text ?? item.adjacent_text ?? item.context_note ?? ""}
+                      {item.share_text ??
+                        item.adjacent_text ??
+                        item.context_note ??
+                        item.transcript ??
+                        item.visual_text ??
+                        ""}
                     </span>
                   </li>
                 ))}

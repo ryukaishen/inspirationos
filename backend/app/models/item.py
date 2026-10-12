@@ -64,10 +64,10 @@ class Item(Base, CreatedAtMixin, UpdatedAtMixin):
     `duplicate_group_id`, so the shortcode index is deliberately non-unique;
     the uniqueness invariant is one item per (message, canonical URL).
     Source FKs are nullable because M9 raw-import deletion may null them while
-    keeping the derived item. `share_text`/`adjacent_text`/`context_note` are
-    private content — never in logs, errors, or job payloads. `embedding` is
-    derived from that private text and is deliberately absent from ItemRead —
-    it never leaves the backend.
+    keeping the derived item. `share_text`/`adjacent_text`/`context_note`/
+    `transcript`/`visual_text` are private content — never in logs, errors,
+    or job payloads. `embedding` is derived from that private text and is
+    deliberately absent from ItemRead — it never leaves the backend.
     """
 
     __tablename__ = "items"
@@ -112,6 +112,10 @@ class Item(Base, CreatedAtMixin, UpdatedAtMixin):
         ),
     )
     context_note: Mapped[str | None] = mapped_column(Text)
+    # Derived from the reel itself by the `transcribe-reels` CLI: speech-to-text
+    # and on-screen text read from sampled frames. Private content, same rules.
+    transcript: Mapped[str | None] = mapped_column(Text)
+    visual_text: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ItemStatus] = mapped_column(
         Enum(ItemStatus, name="item_status", values_callable=lambda e: [m.value for m in e]),
         nullable=False,
